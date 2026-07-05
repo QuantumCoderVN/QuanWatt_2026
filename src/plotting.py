@@ -10,14 +10,65 @@ from config import OUTPUT_DIR
 
 
 def plot_loss(results):
-    plt.figure(figsize=(8, 5))
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    from config import OUTPUT_DIR
+
+    plt.figure(figsize=(9, 5.5))
+
+    styles = {
+        "Classical": {
+            "marker": "o",
+            "linestyle": "-",
+            "linewidth": 2.2,
+            "markersize": 7,
+            "zorder": 3,
+        },
+        "HHL": {
+            "marker": "s",
+            "linestyle": "--",
+            "linewidth": 2.0,
+            "markersize": 6,
+            "zorder": 5,
+        },
+        "VQLS": {
+            "marker": "^",
+            "linestyle": ":",
+            "linewidth": 2.0,
+            "markersize": 6,
+            "zorder": 4,
+        },
+    }
+
+    # Dịch rất nhẹ vị trí marker theo trục x để các điểm không che nhau.
+    x_offsets = {
+        "Classical": -0.04,
+        "HHL": 0.00,
+        "VQLS": 0.04,
+    }
+
+    print("\n" + "=" * 80)
+    print("LOSS HISTORY USED FOR PLOTTING")
+    print("=" * 80)
 
     for r in results:
+        name = r["name"]
+        y = np.array(r["loss_history"], dtype=float)
+        x = np.arange(len(y), dtype=float)
+
+        print(f"\n{name} loss_history:")
+        print(y)
+
+        style = styles.get(name, {})
+        offset = x_offsets.get(name, 0.0)
+
         plt.plot(
-            range(len(r["loss_history"])),
-            r["loss_history"],
-            marker="o",
-            label=r["name"]
+            x + offset,
+            y,
+            label=f"{name} final={r['final_loss']:.2e}",
+            **style,
         )
 
     plt.xlabel("FDLS iteration")

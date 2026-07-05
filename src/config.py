@@ -17,28 +17,23 @@ FDLS_TOL = 1e-7
 
 
 # ============================================================
-# HHL - theo code HHL của bạn
+# HHL CONFIG
 # ============================================================
 
-# Số phase qubit cho QPE
 HHL_PHASE_QUBITS = 8
 
-# Trong code HHL của bạn có:
-# t = 0.2
-#
-# Nhưng với B' từ IEEE, trị riêng thường lớn hơn ví dụ toy của bạn.
-# Do đó để tránh phase bị wrap, dùng t nhỏ hơn.
-# Bản chất vẫn là đúng code HHL:
-# U = exp(i A t)
-HHL_T = 0.12
+# Không dùng trị riêng thật.
+# Dùng bound để chọn t_eff sao cho phase lớn nhất khoảng 0.40.
+HHL_PHASE_TARGET = 0.40
 
-# Trong code HHL của bạn:
-# control_rotation_gate(..., C=1.0)
 HHL_C = 1.0
+
+# Chỉ bật khi debug, không dùng trong bản chính.
+HHL_DEBUG_COMPARE_CLASSICAL = False
 
 
 # ============================================================
-# VQLS - theo code VQLS của bạn
+# VQLS CONFIG
 # ============================================================
 
 VQLS_STEPS = 100
@@ -55,7 +50,11 @@ VQLS_LAYERS = 2
 
 
 # ============================================================
-# PRINT
+# PRINT CONFIG
 # ============================================================
 
-PRINT_EVERY_ITER = True
+# False: không in chi tiết từng vòng FDLS
+PRINT_EVERY_ITER = False
+
+# False: không in chi tiết trong Classical/HHL/VQLS mỗi lần solve
+PRINT_SOLVER_DETAIL = False

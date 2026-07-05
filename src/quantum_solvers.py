@@ -13,8 +13,10 @@ from qiskit.quantum_info import Statevector, SparsePauliOp, Operator
 
 from config import (
     HHL_PHASE_QUBITS,
-    HHL_T,
+    HHL_PHASE_TARGET,
     HHL_C,
+    HHL_DEBUG_COMPARE_CLASSICAL,
+    PRINT_SOLVER_DETAIL,
     VQLS_STEPS,
     VQLS_RHOBEG,
     VQLS_Q_DELTA,
@@ -103,6 +105,26 @@ def recover_scaled_solution(A, b, x_prime):
 
     return x_recovered, k
 
+def gershgorin_lambda_bound(A):
+    """
+    Cận trên trị riêng theo Gershgorin.
+
+    Không tính eigenvalue thật.
+    Phù hợp hơn với tinh thần HHL.
+    """
+
+    A = np.asarray(A, dtype=complex)
+
+    diag_abs = np.abs(np.diag(A))
+    row_sum_abs = np.sum(np.abs(A), axis=1)
+
+    radii = row_sum_abs - diag_abs
+    bound = np.max(diag_abs + radii)
+
+    if bound <= 1e-12:
+        raise ValueError("Gershgorin bound quá nhỏ, không thể scale HHL.")
+
+    return float(bound)
 
 def classical_solve(A, b, label="Classical"):
     """
@@ -226,7 +248,22 @@ def hhl_solve(A, b, label="HHL"):
 
     b_norm = b_pad / np.linalg.norm(b_pad)
 
-    U_matrix = expm(1j * A_pad * HHL_T)
+    lambda_bound = gershgorin_lambda_bound(A_pad)
+
+    t_eff = HHL_PHASE_TARGET * 2 * np.pi / lambda_bound
+
+    U_matrix = expm(1j * A_pad * t_eff)
+
+    if PRINT_SOLVER_DETAIL:
+        print(f"\n[{label}] HHL scaling diagnostic")
+        print("Gershgorin lambda bound:")
+        print(lambda_bound)
+        print("Effective HHL t:")
+        print(t_eff)
+        print("Max phase upper bound:")
+        print(lambda_bound * t_eff / (2 * np.pi))
+        print("QPE resolution:")
+        print(1 / (2 ** phase_qubits))
 
     assert np.allclose(
         U_matrix.conj().T @ U_matrix,
@@ -255,7 +292,7 @@ def hhl_solve(A, b, label="HHL"):
         qc_hhl,
         phase_indices,
         ancilla_index,
-        t=HHL_T,
+        t=t_eff,
         C=HHL_C
     )
 
@@ -311,7 +348,16 @@ def hhl_solve(A, b, label="HHL"):
     print(np.real_if_close(x))
 
     print(f"[{label}] residual ||A x - b|| = {np.linalg.norm(A @ x - b):.6e}")
+    x_classical = np.linalg.solve(A, b)
 
+    print(f"[{label}] Classical reference solution:")
+    print(np.real_if_close(x_classical))
+
+    print(f"[{label}] HHL error ||x_hhl - x_classical||:")
+    print(np.linalg.norm(x - x_classical))
+
+    print(f"[{label}] HHL relative error:")
+    print(np.linalg.norm(x - x_classical) / np.linalg.norm(x_classical))
     return clean_real_vector(x)
 
 
