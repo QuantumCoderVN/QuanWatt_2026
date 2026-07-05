@@ -1,0 +1,77 @@
+```gitignore
+# =========================
+# Python environment
+# =========================
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Python cache
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Jupyter Notebook
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# System files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.*
+
+# =========================
+# Build / distribution
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Test / coverage
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Machine Learning outputs
+# =========================
+# ⚠️ IMPORTANT:
+# output/ is KEPT (NOT ignored) because it contains results images
+# output/
+
+results/
+checkpoints/
+logs/
+Test/
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
+```
