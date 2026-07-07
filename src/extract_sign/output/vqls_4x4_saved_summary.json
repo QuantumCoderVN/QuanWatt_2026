@@ -1,0 +1,38 @@
+{
+  "matrix_size": "4x4",
+  "n_qubits": 2,
+  "num_pauli_terms": 10,
+  "pauli_labels": [
+    "II",
+    "IX",
+    "IZ",
+    "XI",
+    "XX",
+    "XZ",
+    "YY",
+    "ZI",
+    "ZX",
+    "ZZ"
+  ],
+  "shots": 200000,
+  "steps": 160,
+  "seed": 0,
+  "metrics": {
+    "swap_rel_error": 0.01358574010328312,
+    "tomo_rel_error": 0.013633472520740547,
+    "swap_residual": 0.01479713788918859,
+    "tomo_residual": 0.014809744429385818,
+    "classical_residual": 8.326672684688674e-17,
+    "swap_main_time": 2.6128281999990577,
+    "tomo_main_time": 6.803924199997709,
+    "swap_runtime_mean": 2.631579466666153,
+    "swap_runtime_std": 0.04244181305698754,
+    "tomo_runtime_mean": 6.582150466666159,
+    "tomo_runtime_std": 0.044849977504891676,
+    "optimization_time": 977.6084618000023,
+    "tomo_purity": 0.9936222981894598,
+    "final_cost": 0.00011651998657224993
+  },
+  "results_file": "output\\vqls_4x4_saved_results.npz",
+  "summary_file": "output\\vqls_4x4_saved_summary.json"
+}
