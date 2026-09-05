@@ -1,0 +1,44 @@
+seed: 7
+device: auto
+scheme: 1
+norm: 2
+data_dir: artifacts/smoke/data
+output_dir: artifacts/smoke/results
+
+generation:
+  matrix_type: spd
+  train_count: 30
+  validation_count: 10
+  test_count: 10
+  n_min: 25
+  n_max: 49
+  dense_label_max_n: 256
+  one_norm_method: exact
+  two_norm_method: dense
+  label_device: cpu
+  families: [poisson, anisotropic, high_contrast, random_spd, tridiagonal]
+
+model:
+  hidden_dim: 32
+  gcn_layers: 2
+  head_dims: [64, 32]
+  dropout: 0.1
+  use_edge_attr: true
+  edge_hidden_dim: 32
+  residual: true
+
+training:
+  epochs: 4
+  batch_size: 8
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  gradient_clip: 1.0
+  lr_patience: 2
+  early_stopping_patience: 4
+
+benchmark:
+  max_matrices: 5
+  repeats: 1
+  lanczos_iterations: [5, 10]
+  include_torch_hager: true
+  include_exact_timing: true

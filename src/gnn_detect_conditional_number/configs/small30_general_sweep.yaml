@@ -1,0 +1,58 @@
+seed: 456
+device: cpu
+scheme: 2
+norm: 2
+data_dir: artifacts/small30_general_sweep/data
+output_dir: artifacts/small30_general_sweep/results
+
+generation:
+  matrix_type: general
+  train_count: 1000
+  validation_count: 100
+  test_count: 300
+  n_min: 10
+  n_max: 30
+  dense_label_max_n: 256
+  one_norm_method: exact
+  two_norm_method: dense
+  label_device: cpu
+  families:
+    - general_diagonal_dominant
+    - general_scaled_diagonal_dominant
+    - general_sparse_random
+
+model:
+  hidden_dim: 64
+  gcn_layers: 2
+  head_dims: [128, 64]
+  dropout: 0.1
+  use_edge_attr: true
+  edge_hidden_dim: 64
+  residual: true
+
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  gradient_clip: 1.0
+  lr_patience: 10
+  early_stopping_patience: 20
+
+benchmark:
+  max_matrices: 300
+  repeats: 2
+  lanczos_iterations: [5, 10]
+  include_torch_hager: true
+  include_exact_timing: true
+  include_gershgorin: true
+
+size_sweep:
+  matrix_type: general
+  n_min: 20
+  n_max: 100
+  count_per_size: 300
+  families:
+    - general_diagonal_dominant
+    - general_scaled_diagonal_dominant
+    - general_sparse_random

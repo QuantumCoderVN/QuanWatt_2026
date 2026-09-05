@@ -1,0 +1,45 @@
+seed: 42
+device: cpu
+scheme: 1
+norm: 2
+data_dir: artifacts/paper_cpu/data
+output_dir: artifacts/paper_cpu/results
+
+generation:
+  matrix_type: spd
+  train_count: 1000
+  validation_count: 100
+  test_count: 300
+  n_min: 1000
+  n_max: 2000
+  dense_label_max_n: 256
+  one_norm_method: estimate
+  two_norm_method: sparse
+  label_device: cpu
+  families: [poisson, anisotropic, high_contrast, random_spd, tridiagonal]
+
+model:
+  hidden_dim: 112
+  gcn_layers: 2
+  head_dims: [256, 128]
+  dropout: 0.1
+  use_edge_attr: true
+  edge_hidden_dim: 112
+  residual: true
+
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  gradient_clip: 1.0
+  lr_patience: 10
+  early_stopping_patience: 20
+
+benchmark:
+  max_matrices: 300
+  repeats: 4
+  lanczos_iterations: [5, 10]
+  include_torch_hager: false
+  include_exact_timing: false
+  include_gershgorin: true
