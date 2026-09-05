@@ -4,9 +4,9 @@ Python reimplementation of Carson and Chen, *Estimating Condition Number with
 Graph Neural Networks* (arXiv:2603.10277v1, 2026), covering both the 1-norm and
 2-norm condition numbers of sparse SPD matrices.
 
-\[
+$$
 \kappa_2(A)=\lambda_{\max}(A)/\lambda_{\min}(A).
-\]
+$$
 
 ## What is implemented
 
