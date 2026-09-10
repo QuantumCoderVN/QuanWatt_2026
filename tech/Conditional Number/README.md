@@ -146,9 +146,9 @@ aggregated = Linear(Σ_{neighbors} messages)
 ### Training Schemes
 
 **Scheme 1: Inverse-Based**
-- Predict: $\log_{10}(\|A^{-1}\|_2) = -\log_{10}(\lambda_{\min})$
-- Combine with exact $\|A\|_2 = \lambda_{\max}$
-- Reconstruction: $\kappa_2 = \lambda_{\max} \times 10^{\text{model\_output}}$
+- Predict: $\log_{10}(|A^{-1}|\_2)$ $= -\log_{10}(\lambda_{min})$
+- Combine with exact $|A|\_{2}$ = $\lambda_{\max}$ 
+- Reconstruction: $\kappa_2 = \lambda_{\max} \times 10^{\text{model output}}$
 
 **Scheme 2: Direct**
 - Predict: $\log_{10}(\kappa_2)$ directly
@@ -176,7 +176,7 @@ aggregated = Linear(Σ_{neighbors} messages)
 #### Global Features (29 dimensions)
 - **Size:** $\log_{10}(n)$, $\log_{10}(\text{nnz})$, density
 - **Diagonal stats:** mean, std, min, max, range (all log-scaled)
-- **Norms:** $\|A\|_1$, $\|A\|_\infty$, $\|A\|_F$, anisotropy ratio
+- **Norms:** $\|A\|_1$, $\|A\|\_\infty$, $\|A\|_F$, anisotropy ratio
 - **Diagonal dominance:** mean, min, max, std of $|a_{ii}| / \sum_j|a_{ij}|$
 - **Row sparsity:** mean, std, min, max, CV of nonzeros per row
 - **Entry magnitude:** mean, std, min, max, range of $|A_{ij}|$
@@ -216,7 +216,7 @@ $$\text{factor} = \max\left(\frac{\hat{\kappa}}{\kappa}, \frac{\kappa}{\hat{\kap
 
 **Relative Error Accuracy:**
 
-$$\text{relative\_error} = \frac{|\hat{\kappa} - \kappa|}{\kappa}$$
+$$\text{relative error} = \frac{|\hat{\kappa} - \kappa|}{\kappa}$$
 
 $$\text{accuracy} = \text{% samples with relative\_error} < 0.5$$
 
