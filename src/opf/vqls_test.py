@@ -1,688 +1,746 @@
-"""
-VQLS on Qiskit - Quantum Variational Linear Solver.
+"""VQLS cho he KKT DC-QOPF MATPOWER case3sc (3 bus).
 
-Phiên bản này:
-1. Nhận ma trận A bất kỳ kích thước 2^n x 2^n.
-2. Dùng Qiskit SparsePauliOp.from_operator để phân rã A sang Pauli basis.
-3. Tự động dựng controlled-Pauli A_l trong Hadamard test.
-4. Không còn hard-code C, A_PAULI, apply_CA cho từng Pauli term.
-"""
+Pipeline duy nhat trong file:
 
-import numpy as np
-from qiskit import QuantumCircuit
-from qiskit.quantum_info import Statevector, SparsePauliOp, Operator
+    du lieu case3sc
+        -> KKT A_raw x = b_raw
+        -> symmetric equilibration: A_pre y = b_pre, x = D y
+        -> spectral scaling: A_vqls y = b_vqls_raw, ||A_vqls||_2 = 1
+        -> amplitude encoding: |b> = b_vqls_raw / ||b_vqls_raw||
+        -> Pauli/LCU decomposition
+        -> VQLS global cost tren Qiskit Statevector
+        -> phuc hoi do lon va hoan nguyen x = D y.
+
+Day la simulator nghien cuu cho ma tran nho. Tren quantum hardware, phan global
+cost can duoc thay bang cac phep do Pauli/Hadamard-test tuong ung.
+
+Yeu cau:
+    pip install numpy scipy matplotlib qiskit
+"""
+from load_case3 import (
+    A_RAW,
+    B_RAW,
+    A_MATRIX,
+    B_VECTOR_RAW,
+    B_VECTOR_NORM,
+    B_VECTOR,
+    N_QUBITS_INPUT,
+    VARIABLE_LABELS,
+)
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+from scipy.optimize import OptimizeResult, minimize
+
+from qiskit import QuantumCircuit
 from qiskit.circuit.library import StatePreparation
+from qiskit.quantum_info import Operator, SparsePauliOp, Statevector
 
 
-# ============================================================
-# Hyperparameters
-# ============================================================
-N_QUBITS_INPUT = 3          # số qubit của ma trận A: dim(A) = 2^N_QUBITS_INPUT
-N_SHOTS = 10**6
-STEPS = 20
-ETA = 0.8
-Q_DELTA = 0.001
-RNG_SEED = 0
+# =============================================================================
+# CAU HINH
+# =============================================================================
 
-PAULI_ATOL = 1e-10
-PAULI_RTOL = 1e-10
+RNG_SEED = 7
+N_LAYERS = 6
+N_RESTARTS = 4
+MAX_ITERATIONS = 700
 
-# Nếu A ngẫu nhiên dense thì số Pauli term có thể lên tới 4^n.
-# Để None nếu muốn phân rã chính xác.
-# Đặt ví dụ MAX_PAULI_TERMS = 12 để chạy thử nhanh nhưng khi đó A bị xấp xỉ.
-MAX_PAULI_TERMS = None
+PAULI_ATOL = 1e-12
+PAULI_RTOL = 1e-12
 
-# Ansatz:
-# False: giữ ansatz cũ H + RY, phù hợp nghiệm gần thực.
-# True : dùng RY + RZ + entanglement, phù hợp hơn với A bất kỳ/phức.
-USE_COMPLEX_ANSATZ = True
-N_LAYERS = 1
+OUTPUT_DIR = Path(__file__).resolve().parent / "outputs_vqls_qopf"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-np.random.seed(RNG_SEED)
+np.set_printoptions(
+    precision=10,
+    suppress=True,
+    linewidth=180,
+)
 
 
-# ============================================================
-# MODULE 0: Arbitrary matrix A and Qiskit Pauli decomposition
-# ============================================================
+# =============================================================================
+# CAC DOI TUONG DU LIEU
+# =============================================================================
 
 
+@dataclass(frozen=True)
+class PreparedSystem:
+    labels: tuple[str, ...]
+    A_raw: np.ndarray
+    b_raw: np.ndarray
+    D: np.ndarray
+    A_pre: np.ndarray
+    b_pre: np.ndarray
+    alpha: float
+    A_vqls: np.ndarray
+    b_vqls_raw: np.ndarray
+    beta: float
+    b_state: np.ndarray
+    n_qubits: int
 
-def infer_n_qubits_from_matrix(A):
-    """Kiểm tra A là ma trận vuông 2^n x 2^n và trả về n."""
-    A = np.asarray(A, dtype=complex)
 
-    if A.ndim != 2 or A.shape[0] != A.shape[1]:
-        raise ValueError("A_MATRIX phải là ma trận vuông.")
-
-    dim = A.shape[0]
-    n_qubits = int(np.log2(dim))
-
-    if 2**n_qubits != dim:
-        raise ValueError("Kích thước A_MATRIX phải là 2^n x 2^n.")
-
-    return n_qubits, A
+@dataclass(frozen=True)
+class VQLSResult:
+    parameters: np.ndarray
+    state: np.ndarray
+    final_cost: float
+    iterations: int
+    restart: int
+    cost_history: list[float]
 
 
-def pauli_decompose_matrix(A_matrix, atol=1e-10, rtol=1e-10, max_terms=None):
+# =============================================================================
+# 1. LAP HE KKT DC-OPF TU DU LIEU MATPOWER CASE3SC
+# =============================================================================
+
+
+def build_case3sc_dc_kkt() -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
+    """Lap he KKT equality-constrained DC-OPF case3sc.
+
+    Slack bus: bus 1, theta_1 = 0.
+
+    Thu tu bien toi uu:
+        z = [theta_2, theta_3, Pg_1, Pg_2, Pg_3]
+
+    Thu tu an KKT:
+        [theta_2, theta_3, Pg_1, Pg_2, Pg_3,
+         lambda_1, lambda_2, lambda_3]
     """
-    Phân rã A_matrix sang Pauli basis bằng Qiskit.
 
-    A = sum_l C[l] * P_l
+    base_mva = 100.0
+    loads_mw = np.array([110.0, 110.0, 95.0])
 
-    Trả về:
-        n_qubits
-        A_matrix
-        A_pauli
-        pauli_labels
-        coeffs
+    # (from_bus, to_bus, reactance_pu)
+    branches = (
+        (1, 3, 0.62),
+        (3, 2, 0.75),
+        (1, 2, 0.90),
+    )
+
+    # f(Pg) = c2 Pg^2 + c1 Pg + c0
+    cost_c2 = np.array([0.11, 0.085, 0.0])
+    cost_c1 = np.array([5.0, 1.2, 0.0])
+
+    n_bus = 3
+    n_gen = 3
+
+    # Bbus theo MW/rad. Moi nhanh dong gop baseMVA/x vao Laplacian.
+    Bbus = np.zeros((n_bus, n_bus), dtype=float)
+
+    for from_bus, to_bus, reactance in branches:
+        i = from_bus - 1
+        j = to_bus - 1
+        bij = base_mva / reactance
+
+        Bbus[i, i] += bij
+        Bbus[j, j] += bij
+        Bbus[i, j] -= bij
+        Bbus[j, i] -= bij
+
+    # Bo cot theta_1 vi bus 1 la slack bus.
+    B_reduced = Bbus[:, 1:]
+
+    # Moi bus co mot may phat trong case nay.
+    Cg = np.eye(n_bus, n_gen)
+
+    # B_reduced theta - Cg Pg = -Pd.
+    Aeq = np.hstack((B_reduced, -Cg))
+
+    n_angles = 2
+    n_primal = n_angles + n_gen
+
+    H = np.zeros((n_primal, n_primal), dtype=float)
+    H[n_angles:, n_angles:] = np.diag(2.0 * cost_c2)
+
+    linear_gradient = np.concatenate((np.zeros(n_angles), cost_c1))
+
+    A_raw = np.block(
+        [
+            [H, Aeq.T],
+            [Aeq, np.zeros((n_bus, n_bus))],
+        ]
+    )
+
+    b_raw = np.concatenate((-linear_gradient, -loads_mw))
+
+    labels = (
+        "theta_2",
+        "theta_3",
+        "Pg_1",
+        "Pg_2",
+        "Pg_3",
+        "lambda_1",
+        "lambda_2",
+        "lambda_3",
+    )
+
+    return A_raw.astype(complex), b_raw.astype(complex), labels
+
+
+# =============================================================================
+# 2. TIEN XU LY MA TRAN CHO VQLS
+# =============================================================================
+
+
+def prepare_qopf_matrix_for_vqls(
+    A_raw: np.ndarray,
+    b_raw: np.ndarray,
+    labels: tuple[str, ...],
+    eps: float = 1e-14,
+) -> PreparedSystem:
+    """Can bang doi xung, chuan pho va chuan hoa RHS.
+
+    He goc:
+        A_raw x = b_raw
+
+    Dat x = D y va nhan D ben trai:
+        (D A_raw D) y = D b_raw.
+
+    Sau do chia ca hai ve cho alpha = ||D A_raw D||_2.
     """
-    n_qubits, A_matrix = infer_n_qubits_from_matrix(A_matrix)
 
-    op = Operator(
-        A_matrix,
+    A_raw = np.asarray(A_raw, dtype=complex)
+    b_raw = np.asarray(b_raw, dtype=complex)
+
+    if A_raw.ndim != 2 or A_raw.shape[0] != A_raw.shape[1]:
+        raise ValueError("A_raw phai la ma tran vuong.")
+
+    dimension = A_raw.shape[0]
+
+    if b_raw.shape != (dimension,):
+        raise ValueError("Kich thuoc b_raw khong phu hop voi A_raw.")
+
+    n_qubits = int(np.log2(dimension))
+
+    if 2**n_qubits != dimension:
+        raise ValueError("Kich thuoc A_raw phai la 2^n.")
+
+    if not np.allclose(A_raw, A_raw.conj().T, atol=1e-10):
+        raise ValueError("KKT case3sc phai Hermitian.")
+
+    if np.linalg.matrix_rank(A_raw) < dimension:
+        raise ValueError("A_raw bi suy bien.")
+
+    row_norms = np.linalg.norm(A_raw, axis=1)
+
+    if np.any(row_norms < eps):
+        raise ValueError("A_raw co hang gan bang 0.")
+
+    D = np.diag(1.0 / np.sqrt(row_norms))
+    A_pre = D @ A_raw @ D
+    b_pre = D @ b_raw
+
+    alpha = float(np.linalg.norm(A_pre, ord=2))
+
+    if alpha < eps:
+        raise ValueError("||A_pre||_2 gan bang 0.")
+
+    # Quan trong: chia dong thoi ca A va b cho alpha.
+    A_vqls = A_pre / alpha
+    b_vqls_raw = b_pre / alpha
+
+    beta = float(np.linalg.norm(b_vqls_raw))
+
+    if beta < eps:
+        raise ValueError("||b_vqls_raw|| gan bang 0.")
+
+    b_state = b_vqls_raw / beta
+
+    return PreparedSystem(
+        labels=labels,
+        A_raw=A_raw,
+        b_raw=b_raw,
+        D=D,
+        A_pre=A_pre,
+        b_pre=b_pre,
+        alpha=alpha,
+        A_vqls=A_vqls,
+        b_vqls_raw=b_vqls_raw,
+        beta=beta,
+        b_state=b_state,
+        n_qubits=n_qubits,
+    )
+
+
+def print_preprocessing_summary(system: PreparedSystem) -> None:
+    print("=" * 88)
+    print("QOPF MATRIX PREPROCESSING")
+    print("=" * 88)
+    print("Variable order:", list(system.labels))
+    print(f"Dimension                       = {system.A_raw.shape[0]}")
+    print(f"Number of state qubits          = {system.n_qubits}")
+    print(f"Hermitian A_raw                 = {np.allclose(system.A_raw, system.A_raw.conj().T)}")
+    print(f"Hermitian A_vqls                = {np.allclose(system.A_vqls, system.A_vqls.conj().T)}")
+    print(f"cond_2(A_raw)                   = {np.linalg.cond(system.A_raw):.10f}")
+    print(f"cond_2(A_pre)                   = {np.linalg.cond(system.A_pre):.10f}")
+    print(f"||A_vqls||_2                    = {np.linalg.norm(system.A_vqls, 2):.10f}")
+    print(f"alpha                           = {system.alpha:.12f}")
+    print(f"beta = ||b_vqls_raw||           = {system.beta:.12f}")
+    print(f"Nonzeros in A_raw               = {np.count_nonzero(np.abs(system.A_raw) > 1e-14)}")
+    print(f"Nonzeros in A_vqls              = {np.count_nonzero(np.abs(system.A_vqls) > 1e-14)}")
+
+    print("\nA_raw =")
+    print(np.real_if_close(system.A_raw))
+
+    print("\nb_raw =")
+    print(np.real_if_close(system.b_raw))
+
+    print("\nD =")
+    print(np.real_if_close(system.D))
+
+    print("\nA_vqls =")
+    print(np.real_if_close(system.A_vqls))
+
+    print("\nb_vqls_raw =")
+    print(np.real_if_close(system.b_vqls_raw))
+
+    print("\n|b> =")
+    print(np.real_if_close(system.b_state))
+
+
+# =============================================================================
+# 3. PHAN RA PAULI/LCU
+# =============================================================================
+
+
+def pauli_decompose_matrix(
+    matrix: np.ndarray,
+    atol: float = PAULI_ATOL,
+    rtol: float = PAULI_RTOL,
+) -> SparsePauliOp:
+    """Phan ra chinh xac A = sum_l c_l P_l, khong truncate."""
+
+    dimension = matrix.shape[0]
+    n_qubits = int(np.log2(dimension))
+
+    operator = Operator(
+        matrix,
         input_dims=(2,) * n_qubits,
         output_dims=(2,) * n_qubits,
     )
 
-    A_pauli = SparsePauliOp.from_operator(op, atol=atol, rtol=rtol)
-
-    # Tùy chọn truncate theo hệ số lớn nhất để chạy thử nhanh.
-    # Nếu max_terms=None thì giữ chính xác toàn bộ.
-    if max_terms is not None and len(A_pauli.coeffs) > max_terms:
-        idx = np.argsort(np.abs(A_pauli.coeffs))[::-1][:max_terms]
-        A_pauli = SparsePauliOp(A_pauli.paulis[idx], A_pauli.coeffs[idx])
-
-    pauli_labels = [p.to_label() for p in A_pauli.paulis]
-    coeffs = np.asarray(A_pauli.coeffs, dtype=complex)
-
-    return n_qubits, A_matrix, A_pauli, pauli_labels, coeffs
+    return SparsePauliOp.from_operator(
+        operator,
+        atol=atol,
+        rtol=rtol,
+    ).simplify(atol=atol)
 
 
+def print_pauli_decomposition(
+    A_vqls: np.ndarray,
+    pauli_operator: SparsePauliOp,
+) -> None:
+    reconstructed = np.asarray(pauli_operator.to_matrix(), dtype=complex)
+    error = np.linalg.norm(reconstructed - A_vqls)
 
-# # ============================================================
-# # FDLS A_theta matrix: Bprime · Δθ = ΔP / V
-# # ============================================================
+    print("\n" + "=" * 88)
+    print("PAULI / LCU DECOMPOSITION")
+    print("=" * 88)
+    print(f"Number of Pauli terms            = {len(pauli_operator.coeffs)}")
+    print(f"Reconstruction error             = {error:.12e}")
 
-# A_MATRIX = np.array([
-#     [19.99664967, -4.78186315],
-#     [-4.78186315,  4.75996315],
-# ], dtype=complex)
+    if error > 1e-10:
+        raise RuntimeError("Pauli decomposition khong chinh xac.")
 
-# B_VECTOR_RAW = np.array([
-#      0.21038092,
-#     -0.89294760,
-# ], dtype=complex)
+    for label, coefficient in pauli_operator.to_list():
+        coefficient = complex(coefficient)
 
-# B_VECTOR_NORM = np.linalg.norm(B_VECTOR_RAW)
-# B_VECTOR = B_VECTOR_RAW / B_VECTOR_NORM
-# ============================================================
-# OPF-like KKT/Newton linear system
-# Form:
-#     [ H   J^T ] [dx      ] = [ -grad_L ]
-#     [ J    0  ] [dlambda ]   [ -g      ]
-#
-# Đây là ma trận dạng OPF/KKT, nhưng test này chỉ kiểm tra
-# khả năng giải hệ tuyến tính A x = b của VQLS.
-# ============================================================
-
-# A_MATRIX = np.array([
-#     [2.00, 0.30, 1.00, 0.25],
-#     [0.30, 1.50, 0.35, 1.15],
-#     [1.00, 0.35, 0.00, 0.00],
-#     [0.25, 1.15, 0.00, 0.00],
-# ], dtype=complex)
-
-# B_VECTOR_RAW = np.array([
-#     -0.12,
-#      0.08,
-#      0.03,
-#     -0.04,
-# ], dtype=complex)
-
-# B_VECTOR_NORM = np.linalg.norm(B_VECTOR_RAW)
-# B_VECTOR = B_VECTOR_RAW / B_VECTOR_NORM
-# ============================================================
-# OPF KKT linear system from MATPOWER case3sc
-# A_OPF_KKT · x = b_OPF_rhs
-# ============================================================
-
-# A_MATRIX = np.array([
-#     [   0.000000,    0.000000,   0.000000,  0.000000,  0.000000, -111.111111,  244.444444, -133.333333],
-#     [   0.000000,    0.000000,   0.000000,  0.000000,  0.000000, -161.290323, -133.333333,  294.623656],
-#     [   0.000000,    0.000000,   0.220000,  0.000000,  0.000000,   -1.000000,   -0.000000,   -0.000000],
-#     [   0.000000,    0.000000,   0.000000,  0.170000,  0.000000,   -0.000000,   -1.000000,   -0.000000],
-#     [   0.000000,    0.000000,   0.000000,  0.000000,  0.000000,   -0.000000,   -0.000000,   -1.000000],
-#     [-111.111111, -161.290323,  -1.000000, -0.000000, -0.000000,    0.000000,    0.000000,    0.000000],
-#     [ 244.444444, -133.333333,  -0.000000, -1.000000, -0.000000,    0.000000,    0.000000,    0.000000],
-#     [-133.333333,  294.623656,  -0.000000, -0.000000, -1.000000,    0.000000,    0.000000,    0.000000],
-# ], dtype=complex)
-
-# B_VECTOR_RAW = np.array([
-#     -0.000000,
-#     -0.000000,
-#     -5.000000,
-#     -1.200000,
-#     -0.000000,
-#   -110.000000,
-#   -110.000000,
-#    -95.000000,
-# ], dtype=complex)
-
-# B_VECTOR_NORM = np.linalg.norm(B_VECTOR_RAW)
-# B_VECTOR = B_VECTOR_RAW / B_VECTOR_NORM
-
-# ============================================================
-# 2x2 SPD test matrix
-# Symmetric positive definite
-# cond(A) ≈ 2.7836
-# ============================================================
-
-A_MATRIX = np.array([
-    [4.0, 1.0],
-    [1.0, 3.0],
-], dtype=complex)
-
-B_VECTOR_RAW = np.array([
-    1.0,
-    2.0,
-], dtype=complex)
-
-B_VECTOR_NORM = np.linalg.norm(B_VECTOR_RAW)
-B_VECTOR = B_VECTOR_RAW / B_VECTOR_NORM
-# Phân rã Pauli tự động bằng Qiskit
-N_QUBITS, A_MATRIX, A_PAULI, PAULI_LABELS, C = pauli_decompose_matrix(
-    A_MATRIX,
-    atol=PAULI_ATOL,
-    rtol=PAULI_RTOL,
-    max_terms=MAX_PAULI_TERMS,
-)
-
-TOT_QUBITS = N_QUBITS + 1
-ANCILLA_IDX = N_QUBITS
-NUM_PAULI = len(C)
-
-if USE_COMPLEX_ANSATZ:
-    N_PARAMS = 2 * N_QUBITS * N_LAYERS
-else:
-    N_PARAMS = N_QUBITS
-
-
-# ============================================================
-# MODULE 1: Pauli decomposition and circuit components
-# ============================================================
-# def apply_U_b(qc, qubits):
-#     """
-#     Apply U_b = H⊗H⊗...⊗H.
-
-#     Khi đó:
-#         |b> = U_b |0> = uniform state.
-#     """
-#     for q in qubits:
-#         qc.h(q)
-
-def make_Ub_gate(b_vector):
-    """
-    Tạo gate U_b sao cho:
-        U_b |0...0> = |b>
-    """
-    b_vector = np.asarray(b_vector, dtype=complex)
-    b_vector = b_vector / np.linalg.norm(b_vector)
-
-    return StatePreparation(b_vector)
-
-
-U_B_GATE = make_Ub_gate(B_VECTOR)
-
-
-def apply_U_b(qc, qubits, dagger=False):
-    """
-    Nếu dagger=False:
-        apply U_b
-
-    Nếu dagger=True:
-        apply U_b†
-    """
-    if dagger:
-        qc.append(U_B_GATE.inverse(), qubits)
-    else:
-        qc.append(U_B_GATE, qubits)
-
-def apply_controlled_pauli_string(qc, pauli_label, qubits, ancilla):
-    """
-    Apply controlled-Pauli string theo convention của Qiskit.
-
-    Qiskit convention:
-        label bên phải ứng với qubit 0.
-        label bên trái ứng với qubit n-1.
-
-    Ví dụ:
-        pauli_label = "IZX" với n=3
-        X nằm trên qubit 0
-        Z nằm trên qubit 1
-        I nằm trên qubit 2
-    """
-    n = len(qubits)
-
-    if len(pauli_label) != n:
-        raise ValueError("Độ dài Pauli label không khớp số qubit.")
-
-    for str_idx, p in enumerate(pauli_label):
-        # Qiskit: character bên phải là qubit 0
-        q = qubits[n - 1 - str_idx]
-
-        if p == "I":
-            continue
-        elif p == "X":
-            qc.cx(ancilla, q)
-        elif p == "Y":
-            qc.cy(ancilla, q)
-        elif p == "Z":
-            qc.cz(ancilla, q)
+        if abs(coefficient.imag) < 1e-12:
+            coefficient_text = f"{coefficient.real:+.12f}"
         else:
-            raise ValueError(f"Pauli không hợp lệ: {p}")
+            coefficient_text = (
+                f"{coefficient.real:+.12f}"
+                f"{coefficient.imag:+.12f}j"
+            )
+
+        print(f"  {coefficient_text} * {label}")
 
 
-def apply_CA(qc, l, qubits, ancilla):
+# =============================================================================
+# 4. ANSATZ QISKIT: RY + CNOT CHO NGHIEM THUC
+# =============================================================================
+
+
+def build_ansatz(
+    parameters: np.ndarray,
+    n_qubits: int,
+    n_layers: int = N_LAYERS,
+) -> QuantumCircuit:
+    """Hardware-efficient real ansatz.
+
+    KKT, b va nghiem cua case nay deu thuc, nen RZ khong can thiet. Moi layer
+    co RY tren tat ca qubit va mot chuoi CNOT. Huong CNOT duoc dao xen ke.
     """
-    Apply controlled-A_l, trong đó A_l là Pauli string thứ l
-    lấy từ phân rã Pauli tự động của Qiskit.
+
+    parameters = np.asarray(parameters, dtype=float)
+    expected = n_qubits * n_layers
+
+    if parameters.shape != (expected,):
+        raise ValueError(f"Ansatz can {expected} tham so.")
+
+    circuit = QuantumCircuit(n_qubits, name="VQLS_ansatz")
+    index = 0
+
+    for layer in range(n_layers):
+        for qubit in range(n_qubits):
+            circuit.ry(parameters[index], qubit)
+            index += 1
+
+        if n_qubits > 1:
+            if layer % 2 == 0:
+                for control in range(n_qubits - 1):
+                    circuit.cx(control, control + 1)
+            else:
+                for control in range(n_qubits - 1, 0, -1):
+                    circuit.cx(control, control - 1)
+
+    return circuit
+
+
+def ansatz_state(parameters: np.ndarray, n_qubits: int) -> np.ndarray:
+    circuit = build_ansatz(parameters, n_qubits)
+    return np.asarray(Statevector.from_instruction(circuit).data, dtype=complex)
+
+
+def build_b_preparation_circuit(b_state: np.ndarray) -> QuantumCircuit:
+    """Mach U_b sao cho U_b|0...0> = |b>."""
+
+    dimension = b_state.size
+    n_qubits = int(np.log2(dimension))
+    circuit = QuantumCircuit(n_qubits, name="U_b")
+    circuit.append(StatePreparation(b_state), range(n_qubits))
+    return circuit
+
+
+# =============================================================================
+# 5. GLOBAL VQLS COST THEO EFFECTIVE HAMILTONIAN H_G
+# =============================================================================
+
+
+def build_global_cost_operators(
+    A_vqls: np.ndarray,
+    b_state: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Tao H_G va A^dagger A.
+
+        H_G = A^dagger (I - |b><b|) A
+
+        C_G = <x|H_G|x> / <x|A^dagger A|x>.
     """
-    apply_controlled_pauli_string(qc, PAULI_LABELS[l], qubits, ancilla)
+
+    identity = np.eye(A_vqls.shape[0], dtype=complex)
+    projector_b = np.outer(b_state, b_state.conj())
+    A_dagger_A = A_vqls.conj().T @ A_vqls
+    H_global = A_vqls.conj().T @ (identity - projector_b) @ A_vqls
+    return H_global, A_dagger_A
 
 
-# ============================================================
-# MODULE 2: Variational ansatz
-# ============================================================
-def apply_variational(qc, params, qubits):
-    """
-    Ansatz.
-
-    Nếu USE_COMPLEX_ANSATZ=False:
-        Giữ ansatz cũ của bạn:
-            H trên mỗi qubit, sau đó RY.
-
-    Nếu USE_COMPLEX_ANSATZ=True:
-        Dùng ansatz mạnh hơn:
-            H -> nhiều layer RY/RZ + CX entanglement.
-        Ansatz này biểu diễn được phase tốt hơn khi A là ma trận phức.
-    """
-    params = np.asarray(params, dtype=float)
-
-    for q in qubits:
-        qc.h(q)
-
-    if not USE_COMPLEX_ANSATZ:
-        if len(params) != len(qubits):
-            raise ValueError(f"Ansatz cũ cần {len(qubits)} tham số.")
-        for i, q in enumerate(qubits):
-            qc.ry(params[i], q)
-        return
-
-    expected = 2 * len(qubits) * N_LAYERS
-    if len(params) != expected:
-        raise ValueError(f"Ansatz phức cần {expected} tham số, nhưng nhận {len(params)}.")
-
-    k = 0
-    for layer in range(N_LAYERS):
-        for q in qubits:
-            qc.ry(params[k], q)
-            k += 1
-
-        # for q in qubits:
-        #     qc.rz(params[k], q)
-        #     k += 1
-
-        # Entanglement chain
-        if layer < N_LAYERS - 1:
-            for q1, q2 in zip(qubits[:-1], qubits[1:]):
-                qc.cx(q1, q2)
-
-
-# ============================================================
-# MODULE 3: Hadamard test
-# ============================================================
-def hadamard_test(weights, l, lp, j, part):
-    """
-    Measure Re/Im of:
-
-        <0| V† A_l† U_b Z_j U_b† A_lp V |0>
-
-    Với Pauli string:
-        A_l† = A_l
-
-    Do gate tác động lên state theo thứ tự phải-sang-trái,
-    muốn operator là A_l B_j A_lp thì trong circuit phải apply:
-        A_lp -> B_j -> A_l
-    """
-    qc = QuantumCircuit(TOT_QUBITS)
-    main_qubits = list(range(N_QUBITS))
-
-    qc.h(ANCILLA_IDX)
-
-    if part == "Im":
-        qc.p(-np.pi / 2, ANCILLA_IDX)
-
-    apply_variational(qc, weights, main_qubits)
-
-    # Quan trọng: apply A_lp trước
-    apply_CA(qc, lp, main_qubits, ANCILLA_IDX)
-
-    # B_j = U_b Z_j U_b†
-    # Ở đây U_b = H^n nên U_b† = U_b
-    apply_U_b(qc, main_qubits, dagger=True)
-
-    if j != -1:
-        qc.cz(ANCILLA_IDX, main_qubits[j])
-
-    apply_U_b(qc, main_qubits, dagger=False)
-
-    # Quan trọng: apply A_l sau
-    apply_CA(qc, l, main_qubits, ANCILLA_IDX)
-
-    qc.h(ANCILLA_IDX)
-
-    return qc
-
-
-def measure_z_ancilla(weights, l, lp, j, part):
-    """Measure expectation value của Z trên ancilla."""
-    qc = hadamard_test(weights, l, lp, j, part)
-    state = Statevector.from_instruction(qc)
-
-    # Ancilla là qubit cuối cùng, nên trong Qiskit Pauli label,
-    # Z nằm bên trái nhất.
-    pauli_str = "Z" + "I" * N_QUBITS
-    Z_obs = SparsePauliOp.from_list([(pauli_str, 1.0)])
-
-    return state.expectation_value(Z_obs).real
-
-
-def mu(weights, l, lp, j):
-    """Compute μ = Re + i·Im."""
-    re = measure_z_ancilla(weights, l, lp, j, "Re")
-    im = measure_z_ancilla(weights, l, lp, j, "Im")
-    return re + 1j * im
-
-
-# ============================================================
-# MODULE 4: Cost function
-# ============================================================
-def psi_norm(weights):
-    """
-    Compute:
-        <ψ|ψ> = <x| A†A |x>
-    """
-    norm = 0.0 + 0.0j
-
-    for l in range(NUM_PAULI):
-        for lp in range(NUM_PAULI):
-            norm += np.conj(C[l]) * C[lp] * mu(weights, l, lp, -1)
-
-    return norm.real
-
-
-def cost_local(weights):
-    """Compute local cost function C_L."""
-    norm = psi_norm(weights)
-
-    if abs(norm) < 1e-12:
-        return 1e6
-
-    mu_sum = 0.0 + 0.0j
-
-    for l in range(NUM_PAULI):
-        for lp in range(NUM_PAULI):
-            for j in range(N_QUBITS):
-                mu_sum += np.conj(C[l]) * C[lp] * mu(weights, l, lp, j)
-
-    return 0.5 - 0.5 * mu_sum.real / (N_QUBITS * norm)
-
-
-# ============================================================
-# MODULE 5: Optimization
-# ============================================================
-# def parameter_shift_gradient(w, cost_fn):
-#     """Compute gradient bằng parameter-shift rule."""
-#     grad = np.zeros_like(w)
-#     shift = np.pi / 2
-
-#     for i in range(len(w)):
-#         wp = w.copy()
-#         wp[i] += shift
-
-#         wm = w.copy()
-#         wm[i] -= shift
-
-#         grad[i] = 0.5 * (cost_fn(wp) - cost_fn(wm))
-
-#     return grad
-
-
-def main():
-    """Main optimization loop."""
-    w_init = Q_DELTA * np.random.randn(N_PARAMS)
-
-    print(f"Number of qubits inferred from A: {N_QUBITS}")
-    print(f"Total qubits including ancilla:   {TOT_QUBITS}")
-    print(f"Number of ansatz parameters:      {N_PARAMS}")
-    print(f"Number of Pauli terms:            {NUM_PAULI}")
-    print(f"Condition number of A:            {np.linalg.cond(A_MATRIX):.3e}")
-
-    print(f"\nInitial parameters:\n{w_init}")
-
-    print("\n" + "=" * 60)
-    print("Pauli decomposition of A from Qiskit")
-    print("=" * 60)
-    print(A_PAULI)
-
-    # Kiểm tra phân rã có khớp A không
-    A_reconstructed = np.asarray(A_PAULI.to_matrix(), dtype=complex)
-    decomp_err = np.linalg.norm(A_reconstructed - A_MATRIX)
-
-    print(f"\nDecomposition check ||A_pauli - A_matrix|| = {decomp_err:.6e}")
-
-    cost_history = []
-
-    def cost_with_log(w):
-        c = cost_local(w)
-        cost_history.append(c)
-        return c
-
-    print("\n" + "=" * 60)
-    print("Optimization using SciPy COBYLA")
-    print("=" * 60)
-
-    from scipy.optimize import minimize
-
-    res = minimize(
-        cost_with_log,
-        w_init,
-        method="COBYLA",
-        options={
-            "rhobeg": 0.5,
-            "maxiter": STEPS,
-            "catol": 1e-8,
-        },
+def make_global_cost_function(
+    system: PreparedSystem,
+):
+    H_global, A_dagger_A = build_global_cost_operators(
+        system.A_vqls,
+        system.b_state,
     )
 
-    w = res.x
+    def global_cost(parameters: np.ndarray) -> float:
+        state = ansatz_state(parameters, system.n_qubits)
+        numerator = float(np.vdot(state, H_global @ state).real)
+        denominator = float(np.vdot(state, A_dagger_A @ state).real)
 
-    print(f"\n[SciPy] Iterations: {len(cost_history)}, Final cost: {res.fun:.2e}")
+        if denominator < 1e-14:
+            return 1e6
 
-    log_indices = [0, 5, 10, 20, len(cost_history) // 2, len(cost_history) - 1]
-    seen = set()
+        cost = numerator / denominator
+        return max(float(np.real(cost)), 0.0)
 
-    for i in log_indices:
-        if 0 <= i < len(cost_history) and i not in seen:
-            print(f"  Step {i:3d}: Cost = {cost_history[i]:.7f}")
-            seen.add(i)
+    return global_cost
 
-    print(f"\nOptimized parameters:\n{w}")
-    print(f"Final cost: {res.fun:.2e}")
 
-    # ============================================================
-    # Classical comparison
-    # ============================================================
-    print("\n" + "=" * 60)
-    print("Comparison with classical solution")
-    print("=" * 60)
+# =============================================================================
+# 6. TOI UU VQLS
+# =============================================================================
 
-    A_matrix = A_MATRIX
-    dim = 2**N_QUBITS
 
-    # Vì apply_U_b = H^n, vector b là uniform state.
-    b_vector = B_VECTOR
+def optimize_vqls(system: PreparedSystem) -> VQLSResult:
+    cost_function = make_global_cost_function(system)
+    rng = np.random.default_rng(RNG_SEED)
+    n_parameters = system.n_qubits * N_LAYERS
 
-    try:
-        x_classical = np.linalg.solve(A_matrix, b_vector)
-    except np.linalg.LinAlgError:
-        print("A bị suy biến hoặc gần suy biến. Dùng least-squares thay cho solve.")
-        x_classical = np.linalg.lstsq(A_matrix, b_vector, rcond=None)[0]
+    best_result: OptimizeResult | None = None
+    best_restart = -1
+    best_history: list[float] = []
 
-    x_norm = x_classical / np.linalg.norm(x_classical)
-    c_probs = np.abs(x_norm) ** 2
+    print("\n" + "=" * 88)
+    print("VQLS OPTIMIZATION")
+    print("=" * 88)
+    print(f"Ansatz layers                    = {N_LAYERS}")
+    print(f"Number of parameters             = {n_parameters}")
+    print(f"Restarts                         = {N_RESTARTS}")
+    print(f"Maximum iterations/restart       = {MAX_ITERATIONS}")
 
-    # State từ ansatz VQLS
-    qc_state = QuantumCircuit(N_QUBITS)
-    apply_variational(qc_state, w, list(range(N_QUBITS)))
-    state = Statevector.from_instruction(qc_state)
+    for restart in range(N_RESTARTS):
+        initial = rng.uniform(-np.pi, np.pi, size=n_parameters)
+        history: list[float] = []
 
-    # Quan trọng:
-    # Ở phiên bản này ta KHÔNG reverse qubit order sang PennyLane nữa.
-    # A_MATRIX, A_PAULI và Statevector đều dùng cùng convention của Qiskit.
-    x_prime_normalized = state.data
+        def logged_cost(parameters: np.ndarray) -> float:
+            value = cost_function(parameters)
+            history.append(value)
+            return value
 
-    # ============================================================
-    # Solution Recovery via Scaling Factor k
-    # ============================================================
-    b_prime = A_matrix @ x_prime_normalized
-
-    denom = np.vdot(b_prime, b_prime)
-    if abs(denom) < 1e-12:
-        k_coeff = 0.0
-    else:
-        k_coeff = np.vdot(b_prime, b_vector) / denom
-
-    x_vqls_recovered = k_coeff * x_prime_normalized
-    # ============================================================
-    # Compare recovered VQLS solution with RAW FDLS classical solution
-    # ============================================================
-
-    # Vì B_VECTOR đã normalize, x_vqls_recovered hiện đang là nghiệm của:
-    #     A · x = B_VECTOR_RAW / ||B_VECTOR_RAW||
-    #
-    # Muốn quay lại nghiệm gốc của FDLS:
-    #     A · Δθ = B_VECTOR_RAW
-    #
-    # thì nhân lại với ||B_VECTOR_RAW||.
-    x_vqls_recovered_raw = B_VECTOR_NORM * x_vqls_recovered
-
-    # Nghiệm cổ điển của hệ FDLS raw
-    x_classical_raw = np.linalg.solve(A_matrix, B_VECTOR_RAW)
-
-    print(f"\nRecovered RAW FDLS solution from VQLS Δθ = ||b_raw|| · x_VQLS =")
-    print(np.real_if_close(x_vqls_recovered_raw))
-
-    print(f"\nClassical RAW FDLS solution Δθ =")
-    print(np.real_if_close(x_classical_raw))
-
-    raw_abs_err = np.linalg.norm(x_vqls_recovered_raw - x_classical_raw)
-    raw_rel_err = raw_abs_err / np.linalg.norm(x_classical_raw)
-    raw_residual = np.linalg.norm(A_matrix @ x_vqls_recovered_raw - B_VECTOR_RAW)
-
-    print(f"\nRAW absolute error ||x_VQLS_raw - x_classical_raw|| = {raw_abs_err:.6e}")
-    print(f"RAW relative error                              = {raw_rel_err:.6e}")
-    print(f"RAW residual ||A·x_VQLS_raw - b_raw||          = {raw_residual:.6e}")
-    print(f"\nb' = A · x'_VQLS     = {np.real_if_close(b_prime)}")
-    print(f"b  input             = {np.real_if_close(b_vector)}")
-
-    print(f"\nRecovery coefficient k = {k_coeff}")
-    print(f"  |k|    = {np.abs(k_coeff):.8f}")
-    print(f"  arg(k) = {np.angle(k_coeff):.8f} rad")
-
-    print(f"\nRecovered VQLS solution x_VQLS = k·x' =")
-    print(np.real_if_close(x_vqls_recovered))
-
-    print(f"\nClassical solution x_classical =")
-    print(np.real_if_close(x_classical))
-
-    abs_err = np.linalg.norm(x_vqls_recovered - x_classical)
-    rel_err = abs_err / np.linalg.norm(x_classical)
-
-    print(f"\nAbsolute error ||x_VQLS - x_classical|| = {abs_err:.6e}")
-    print(f"Relative error                         = {rel_err:.6e}")
-
-    residual = np.linalg.norm(A_matrix @ x_vqls_recovered - b_vector)
-
-    print(f"\nResidual check ||A·x_VQLS - b|| = {residual:.6e}")
-    print(f"  A·x_VQLS = {np.real_if_close(A_matrix @ x_vqls_recovered)}")
-    print(f"  b        = {np.real_if_close(b_vector)}")
-
-    print("\n" + "=" * 70)
-    print("SOLUTION RECOVERY COMPLETE")
-    print("=" * 70)
-
-    q_probs = np.abs(x_prime_normalized) ** 2
-
-    print(f"\n{'Index':<8}{'Classical':<15}{'Quantum':<15}{'|Diff|':<12}")
-
-    for i in range(dim):
-        print(
-            f"{i:<8}"
-            f"{c_probs[i]:<15.6f}"
-            f"{q_probs[i]:<15.6f}"
-            f"{abs(c_probs[i] - q_probs[i]):<12.6f}"
+        result = minimize(
+            logged_cost,
+            initial,
+            method="L-BFGS-B",
+            options={
+                "maxiter": MAX_ITERATIONS,
+                "ftol": 1e-14,
+                "gtol": 1e-10,
+                "maxls": 40,
+            },
         )
 
-    fidelity = np.sum(np.sqrt(c_probs * q_probs)) ** 2
-    print(f"\nFidelity: {fidelity:.6f}")
-    
+        print(
+            f"Restart {restart}: cost={result.fun:.12e}, "
+            f"iterations={result.nit}, success={result.success}"
+        )
 
-    state_fidelity = np.abs(np.vdot(x_norm, x_prime_normalized)) ** 2
-    print(f"State fidelity |<x_classical_norm|x_vqls>|^2 = {state_fidelity:.8f}")
+        if best_result is None or result.fun < best_result.fun:
+            best_result = result
+            best_restart = restart
+            best_history = history
 
-    def exact_global_cost(weights):
-        qc_state = QuantumCircuit(N_QUBITS)
-        apply_variational(qc_state, weights, list(range(N_QUBITS)))
-        x = Statevector.from_instruction(qc_state).data
+    if best_result is None:
+        raise RuntimeError("VQLS optimizer khong tra ket qua.")
 
-        b = B_VECTOR
-        psi = A_MATRIX @ x
+    final_state = ansatz_state(best_result.x, system.n_qubits)
+    final_state = final_state / np.linalg.norm(final_state)
 
-        numerator = np.abs(np.vdot(b, psi)) ** 2
-        denominator = np.vdot(psi, psi).real
+    return VQLSResult(
+        parameters=np.asarray(best_result.x, dtype=float),
+        state=final_state,
+        final_cost=float(best_result.fun),
+        iterations=int(best_result.nit),
+        restart=best_restart,
+        cost_history=best_history,
+    )
 
-        return 1.0 - numerator / denominator
-    print(f"Exact global cost = {exact_global_cost(w):.8e}")
 
-    # ============================================================
-    # Plotting
-    # ============================================================
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+# =============================================================================
+# 7. PHUC HOI NGHIEM QOPF/KKT
+# =============================================================================
 
-    axes[0].plot(cost_history, "g-o", linewidth=2, markersize=4)
-    axes[0].set_xlabel("Step")
-    axes[0].set_ylabel("Cost C_L")
+
+def relative_error(approximation: np.ndarray, reference: np.ndarray) -> float:
+    denominator = float(np.linalg.norm(reference))
+
+    if denominator < 1e-14:
+        return float(np.linalg.norm(approximation - reference))
+
+    return float(np.linalg.norm(approximation - reference) / denominator)
+
+
+def relative_residual(A: np.ndarray, x: np.ndarray, b: np.ndarray) -> float:
+    denominator = float(np.linalg.norm(b))
+
+    if denominator < 1e-14:
+        return float(np.linalg.norm(A @ x - b))
+
+    return float(np.linalg.norm(A @ x - b) / denominator)
+
+
+def recover_and_report(
+    system: PreparedSystem,
+    result: VQLSResult,
+) -> dict[str, np.ndarray | float | complex]:
+    """Phuc hoi ba cap nghiem: z -> y -> x."""
+
+    x_state = result.state / np.linalg.norm(result.state)
+
+    # Cap 1: A_vqls z = |b>. VQLS chi tra huong, nen tim he so k phuc hoi.
+    b_prime = system.A_vqls @ x_state
+    denominator = np.vdot(b_prime, b_prime)
+
+    if abs(denominator) < 1e-14:
+        raise RuntimeError("||A_vqls |x(theta)>|| gan bang 0.")
+
+    k_coefficient = np.vdot(b_prime, system.b_state) / denominator
+    z_normalized_rhs = k_coefficient * x_state
+
+    # Cap 2: A_vqls y = b_vqls_raw.
+    y_preconditioned = system.beta * z_normalized_rhs
+
+    # Cap 3: A_raw x = b_raw, voi x = D y.
+    x_qopf = system.D @ y_preconditioned
+
+    # Cac nghiem co dien sau chi dung de kiem chung simulator.
+    z_classical = np.linalg.solve(system.A_vqls, system.b_state)
+    y_classical = np.linalg.solve(system.A_vqls, system.b_vqls_raw)
+    x_classical = np.linalg.solve(system.A_raw, system.b_raw)
+
+    z_classical_state = z_classical / np.linalg.norm(z_classical)
+    state_fidelity = float(abs(np.vdot(z_classical_state, x_state)) ** 2)
+
+    metrics = {
+        "normalized_error": relative_error(z_normalized_rhs, z_classical),
+        "normalized_residual": relative_residual(
+            system.A_vqls,
+            z_normalized_rhs,
+            system.b_state,
+        ),
+        "preconditioned_error": relative_error(
+            y_preconditioned,
+            y_classical,
+        ),
+        "preconditioned_residual": relative_residual(
+            system.A_vqls,
+            y_preconditioned,
+            system.b_vqls_raw,
+        ),
+        "qopf_error": relative_error(x_qopf, x_classical),
+        "qopf_residual": relative_residual(
+            system.A_raw,
+            x_qopf,
+            system.b_raw,
+        ),
+    }
+
+    print("\n" + "=" * 88)
+    print("VQLS SOLUTION RECOVERY")
+    print("=" * 88)
+    print(f"Best restart                     = {result.restart}")
+    print(f"Optimizer iterations             = {result.iterations}")
+    print(f"Final global cost                = {result.final_cost:.12e}")
+    print(f"Recovery coefficient k           = {k_coefficient}")
+    print(f"State fidelity                   = {state_fidelity:.12f}")
+
+    print("\nRecovered original QOPF/KKT solution:")
+
+    for label, value in zip(system.labels, x_qopf, strict=True):
+        value = complex(value)
+
+        if abs(value.imag) < 1e-9:
+            print(f"  {label:>10s} = {value.real: .12f}")
+        else:
+            print(
+                f"  {label:>10s} = "
+                f"{value.real: .12f}{value.imag:+.12f}j"
+            )
+
+    print("\nClassical original QOPF/KKT solution:")
+
+    for label, value in zip(system.labels, x_classical, strict=True):
+        value = complex(value)
+        print(f"  {label:>10s} = {value.real: .12f}")
+
+    print("\nAccuracy at normalized VQLS system:")
+    print(f"  Relative solution error        = {metrics['normalized_error']:.12e}")
+    print(f"  Relative residual              = {metrics['normalized_residual']:.12e}")
+
+    print("\nAccuracy at preconditioned system:")
+    print(f"  Relative solution error        = {metrics['preconditioned_error']:.12e}")
+    print(f"  Relative residual              = {metrics['preconditioned_residual']:.12e}")
+
+    print("\nAccuracy at original QOPF/KKT system:")
+    print(f"  Relative solution error        = {metrics['qopf_error']:.12e}")
+    print(f"  Relative residual              = {metrics['qopf_residual']:.12e}")
+
+    return {
+        "x_state": x_state,
+        "z_normalized_rhs": z_normalized_rhs,
+        "y_preconditioned": y_preconditioned,
+        "x_qopf": x_qopf,
+        "z_classical_state": z_classical_state,
+        "x_classical": x_classical,
+        "k_coefficient": k_coefficient,
+        "state_fidelity": state_fidelity,
+        **metrics,
+    }
+
+
+# =============================================================================
+# 8. VE KET QUA
+# =============================================================================
+
+
+def plot_results(
+    result: VQLSResult,
+    recovered: dict[str, np.ndarray | float | complex],
+) -> Path:
+    quantum_state = np.asarray(recovered["x_state"], dtype=complex)
+    classical_state = np.asarray(
+        recovered["z_classical_state"],
+        dtype=complex,
+    )
+
+    quantum_probabilities = np.abs(quantum_state) ** 2
+    classical_probabilities = np.abs(classical_state) ** 2
+
+    figure, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+
+    history = np.maximum(np.asarray(result.cost_history, dtype=float), 1e-16)
+    axes[0].plot(history, color="seagreen", linewidth=1.8)
     axes[0].set_yscale("log")
+    axes[0].set_xlabel("Function evaluation")
+    axes[0].set_ylabel("Global VQLS cost")
     axes[0].set_title("Cost convergence")
     axes[0].grid(True, alpha=0.3)
 
-    axes[1].bar(range(dim), c_probs, color="steelblue", edgecolor="black")
-    axes[1].set_xlabel("Basis state")
+    indices = np.arange(quantum_probabilities.size)
+    axes[1].bar(indices, classical_probabilities, color="steelblue")
+    axes[1].set_xlabel("Basis index")
     axes[1].set_ylabel("Probability")
-    axes[1].set_title("Classical solution")
+    axes[1].set_title("Classical normalized state")
 
-    axes[2].bar(range(dim), q_probs, color="seagreen", edgecolor="black")
-    axes[2].set_xlabel("Basis state")
+    axes[2].bar(indices, quantum_probabilities, color="darkorange")
+    axes[2].set_xlabel("Basis index")
     axes[2].set_ylabel("Probability")
-    axes[2].set_title("VQLS solution")
+    axes[2].set_title("VQLS normalized state")
 
-    plt.tight_layout()
-    plt.savefig("vqls_results.png", dpi=120, bbox_inches="tight")
-    print("\nPlot saved to: vqls_results.png")
+    figure.tight_layout()
+    output_path = OUTPUT_DIR / "vqls_qopf_case3sc_results.png"
+    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+    return output_path
 
-    return w, cost_history, c_probs, q_probs
+
+# =============================================================================
+# 9. MAIN
+# =============================================================================
+
+
+def main() -> None:
+    np.random.seed(RNG_SEED)
+
+    A_raw, b_raw, labels = build_case3sc_dc_kkt()
+    system = prepare_qopf_matrix_for_vqls(A_raw, b_raw, labels)
+    print_preprocessing_summary(system)
+
+    pauli_operator = pauli_decompose_matrix(system.A_vqls)
+    print_pauli_decomposition(system.A_vqls, pauli_operator)
+
+    # Kiem tra mach amplitude encoding cua |b>.
+    b_circuit = build_b_preparation_circuit(system.b_state)
+    prepared_b = Statevector.from_instruction(b_circuit).data
+    b_preparation_error = np.linalg.norm(prepared_b - system.b_state)
+    print(f"\nStatePreparation error            = {b_preparation_error:.12e}")
+
+    if b_preparation_error > 1e-10:
+        raise RuntimeError("Mach U_b khong tao dung |b>.")
+
+    result = optimize_vqls(system)
+    recovered = recover_and_report(system, result)
+    plot_path = plot_results(result, recovered)
+
+    print(f"\nPlot saved to: {plot_path}")
 
 
 if __name__ == "__main__":

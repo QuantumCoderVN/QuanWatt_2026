@@ -1,0 +1,4 @@
+-r requirements.txt
+scipy>=1.11,<2
+qiskit>=1.2,<3
+qiskit-aer>=0.15,<1

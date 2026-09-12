@@ -1,0 +1,75 @@
+{
+    "shots": 8000,
+    "counts": {
+        "10000000": 7,
+        "10100000": 1,
+        "10101010": 2,
+        "11000000": 10,
+        "11100000": 1,
+        "11110110": 1,
+        "00000000": 2408,
+        "00100000": 1079,
+        "00101101": 1,
+        "01000000": 4224,
+        "01100000": 266
+    },
+    "problem": {
+        "A": [
+            [
+                4,
+                0.4,
+                0.2,
+                0
+            ],
+            [
+                0.4,
+                5,
+                -0.3,
+                0.1
+            ],
+            [
+                0.2,
+                -0.3,
+                3.5,
+                0.5
+            ],
+            [
+                0,
+                0.1,
+                0.5,
+                4.5
+            ]
+        ],
+        "b": [
+            0.03,
+            -0.02,
+            0.04,
+            -0.01
+        ]
+    },
+    "algorithm": {
+        "C_value": 0.17671458676442586,
+        "phase_qubits": 5,
+        "target_qubits": 2,
+        "success_ancilla_value": 1
+    },
+    "circuit_type": "hhl-main",
+    "qubit_layout": {
+        "total_qubits": 8,
+        "ancilla_index": 7,
+        "phase_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+        ],
+        "target_indices": [
+            5,
+            6
+        ],
+        "counts_endianness": "qiskit-big-endian-display",
+        "measurement_mapping": "qubit-q-to-classical-bit-q"
+    },
+    "schema_version": "1.0"
+}

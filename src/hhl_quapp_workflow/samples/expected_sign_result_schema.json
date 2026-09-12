@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "circuit_type": "hhl-sign",
+  "counts": {
+    "<9-bit-qiskit-count-key>": 123
+  },
+  "shots": 100000,
+  "qubit_layout": {
+    "total_qubits": 9,
+    "phase_indices": [0, 1, 2, 3, 4],
+    "target_indices": [5, 6],
+    "ancilla_index": 7,
+    "sign_extra_index": 8,
+    "counts_endianness": "qiskit-big-endian-display",
+    "measurement_mapping": "qubit-q-to-classical-bit-q"
+  }
+}

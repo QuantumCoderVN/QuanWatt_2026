@@ -457,8 +457,10 @@ def plot_results(csv_path: Path, output_dir: Path, latest_only: bool = True) -> 
     # Use discrete positions to avoid overlapping points when size 3 and 4 both use 2 qubits,
     # and size 5 and 6 both use 3 qubits. Tick labels still show the corresponding qubit count.
     x_positions = np.arange(len(sizes))
-    tick_labels = [f"{target_qubits_for_size(s)}q\n{s}x{s}" for s in sizes]
-
+    tick_labels = [
+        f"{target_qubits_for_size(size)} qubit / {size}×{size}"
+        for size in sizes
+    ]
     by_method_size: dict[tuple[str, int], dict[str, Any]] = {
         (row["method"], int(row["matrix_size"])): row for row in rows
     }
@@ -486,27 +488,82 @@ def plot_results(csv_path: Path, output_dir: Path, latest_only: bool = True) -> 
     plt.close(fig1)
 
     # Chart 2: runtime.
-    fig2, ax2 = plt.subplots(figsize=(9, 5))
+    method_labels = {
+        "shot": "Parity check",
+        "tomography": "Tomography",
+    }
+
+    method_markers = {
+        "shot": "o",
+        "tomography": "s",
+    }
+
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+
     for method in methods:
         y_values = []
+
         for size in sizes:
             row = by_method_size.get((method, size))
-            y_values.append(np.nan if row is None else float(row["runtime_seconds"]))
-        ax2.plot(x_positions, y_values, marker="o", label=method)
+            y_values.append(
+                np.nan if row is None else float(row["runtime_seconds"])
+            )
+
+        ax2.plot(
+            x_positions,
+            y_values,
+            marker=method_markers.get(method, "o"),
+            linewidth=2,
+            markersize=7,
+            label=method_labels.get(method, method),
+        )
+
+        # Hiển thị runtime bên cạnh từng điểm
+        for x, runtime in zip(x_positions, y_values):
+            if np.isnan(runtime):
+                continue
+
+            # Dưới 60 giây hiển thị giây, từ 60 giây hiển thị phút
+            if runtime < 60:
+                runtime_label = f"{runtime:.1f} s"
+            else:
+                runtime_label = f"{runtime / 60:.1f} min"
+
+            # Tránh label của hai đường chồng lên nhau
+            y_offset = -18 if method == "shot" else 8
+
+            ax2.annotate(
+                runtime_label,
+                xy=(x, runtime),
+                xytext=(0, y_offset),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+            )
+
+    # Label trục X giống cấu trúc trong hình mẫu
+    tick_labels = [
+        f"{target_qubits_for_size(size)} qubit / {size}×{size}"
+        for size in sizes
+    ]
 
     ax2.set_xticks(x_positions)
     ax2.set_xticklabels(tick_labels)
-    ax2.set_xlabel("Number of target qubits corresponding to matrix size")
-    ax2.set_ylabel("HHL module running time (seconds)")
-    ax2.set_title("Running time comparison of the two HHL solution recovery methods")
+
+    ax2.set_xlabel("System size (target qubits / matrix size)")
+    ax2.set_ylabel("Runtime (seconds)")
+
+    # Không đặt tiêu đề để giống hình mẫu
+    ax2.set_title("")
+
     ax2.grid(True, alpha=0.3)
-    ax2.legend()
+    ax2.legend(loc="upper left")
     fig2.tight_layout()
 
     runtime_plot_path = output_dir / "hhl_recovery_runtime_comparison.png"
     fig2.savefig(runtime_plot_path, dpi=200, bbox_inches="tight")
     plt.close(fig2)
-
     return accuracy_plot_path, runtime_plot_path
 
 
