@@ -1,14 +1,83 @@
-# HHL multi-job workflow for Quapp
+# HHL Multi-Job Workflow for QuApp
 
-Bộ mã này tách script HHL ban đầu thành:
+This subproject splits the original HHL experiment into deployable QuApp circuit functions and a local controller:
 
-1. **Quapp function `hhl-main-circuit`**: một job đo mạch HHL để lấy `|x_i|²`.
-2. **Quapp function `hhl-sign-circuit`**: ba job độc lập cho `(0,1)`, `(1,2)`, `(2,3)` để khôi phục dấu tương đối.
-3. **Local controller**: invoke, poll, lưu JSON, hậu chọn, khôi phục dấu, tính hệ số `k`, so sánh nghiệm cổ điển và vẽ biểu đồ.
+1. `hhl-main-circuit`: one job that measures the main HHL circuit to estimate `|x_i|^2`.
+2. `hhl-sign-circuit`: independent jobs for selected index pairs to recover relative signs.
+3. Local controller: invokes and polls jobs, stores JSON, performs postselection, reconstructs signs and scale, compares against a classical solution, and generates plots.
 
-Mỗi thư mục function trên Quapp có đúng hai file: `handler.py` và `requirements.txt`.
+Each deployable QuApp function directory contains a `handler.py` and its own `requirements.txt`.
 
-## Bài toán cố định
+## Directory structure
+
+```text
+hhl_quapp_workflow/
+|-- quapp/
+|   |-- hhl-main/
+|   |   |-- handler.py
+|   |   `-- requirements.txt
+|   `-- hhl-sign/
+|       |-- handler.py
+|       `-- requirements.txt
+|-- local/
+|   |-- run_workflow.py
+|   |-- analyze_saved_results.py
+|   |-- analyze.py
+|   |-- offline_smoke_test.py
+|   |-- requirements.txt
+|   |-- requirements-dev.txt
+|   |-- input/
+|   |-- input_16x16/
+|   |-- output/
+|   `-- output_16x16/
+`-- samples/
+```
+
+## `quapp/`
+
+Contains the code deployed to QuApp.
+
+### `quapp/hhl-main/`
+
+`handler.py` builds the main HHL circuit. Its measurements are used to estimate the probability of each target-register basis state after the required postselection. The function-specific dependencies are listed in `requirements.txt`.
+
+### `quapp/hhl-sign/`
+
+`handler.py` builds an interference circuit for a requested pair of solution indices. The additional sign qubit allows the local analysis to infer whether two real solution components have equal or opposite signs. Its dependencies are listed in the adjacent `requirements.txt`.
+
+## `local/`
+
+Contains the workstation-side controller, offline validation, and analysis tools.
+
+- `run_workflow.py` invokes the QuApp functions, polls jobs, saves raw and extracted responses, reconstructs the signed solution, and creates plots.
+- `analyze_saved_results.py` repeats reconstruction and plotting from saved result JSON without consuming additional quantum jobs.
+- `analyze.py` analyzes the checked-in input/output layout.
+- `offline_smoke_test.py` executes the handler logic with Qiskit Aer before deployment.
+- `requirements.txt` contains controller dependencies.
+- `requirements-dev.txt` adds packages required for local simulation and development.
+
+### `local/input/` and `local/input_16x16/`
+
+Saved QuApp result JSON used as analysis inputs for the small and 16-by-16 workflows. Files named `hhl_result.json` contain the main job result; files named `sign_I_J_result.json` contain sign-interference results for a pair of indices.
+
+### `local/output/` and `local/output_16x16/`
+
+Generated analysis artifacts. Each output directory contains:
+
+- `analysis/summary.json`: reconstructed solution and quality metrics; and
+- `figures/`: solution, probability, and sign-diagnostic plots.
+
+### `local/__pycache__/`
+
+Automatically generated Python bytecode, not maintained source code.
+
+## `samples/`
+
+Contains example request payloads for the main HHL circuit and sign circuits, plus expected JSON result schemas. Use these samples to understand and validate the QuApp function contract.
+
+## Fixed demonstration problem
+
+The checked-in small workflow uses:
 
 ```text
 A = [[4.0,  0.4,  0.2,  0.0],
@@ -19,173 +88,58 @@ A = [[4.0,  0.4,  0.2,  0.0],
 b = [0.03, -0.02, 0.04, -0.01]
 ```
 
-Nghiệm cổ điển tham chiếu xấp xỉ:
+The authoritative matrix and vector are defined in the handlers and controller. Keep all deployed and local copies synchronized when changing the demonstration problem.
 
-```text
-[ 0.00732676, -0.00384886, 0.01116242, -0.00337696 ]
-```
-
-Dấu kỳ vọng của hướng nghiệm là `[+, -, +, -]`.
-
-## Cấu trúc
-
-```text
-quapp/hhl-main/handler.py
-quapp/hhl-main/requirements.txt
-quapp/hhl-sign/handler.py
-quapp/hhl-sign/requirements.txt
-local/run_workflow.py
-local/analyze_saved_results.py
-local/offline_smoke_test.py
-local/requirements.txt
-local/requirements-dev.txt
-local/.env.example
-samples/*.json
-```
-
-## Deploy function 1: HHL main
-
-- Tạo function tên `hhl-main-circuit`.
-- Chọn/Open IDE với Qiskit runtime.
-- Dán hai file trong `quapp/hhl-main/`.
-- Chọn Qiskit SDK version tương thích với `qiskit>=1.2,<3`.
-- Save version, Deploy và chờ trạng thái Ready.
-- Test UI bằng Raw JSON `{}`.
-
-Function trả về một `QuantumCircuit` 8 qubit và 8 classical bit. Measurement map qubit `q` sang classical bit `q`.
-
-## Deploy function 2: HHL sign
-
-- Tạo function tên `hhl-sign-circuit`.
-- Chọn/Open IDE với Qiskit runtime.
-- Dán hai file trong `quapp/hhl-sign/`.
-- Save version, Deploy và chờ Ready.
-- Test lần lượt ba Raw JSON trong `samples/`.
-
-Mỗi sign job trả về mạch 9 qubit: 8 qubit HHL và `sign_extra` ở index 8.
-
-## Tạo API token
-
-Token phải được scope tới:
-
-- cả hai function;
-- device simulator/hardware định dùng;
-- project hiện tại.
-
-Lưu token vào `.env`, không ghi thẳng vào mã nguồn hoặc commit Git.
-
-## Chạy local
+## Local setup
 
 ```bash
-cd local
+cd src/hhl_quapp_workflow/local
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+Activate the environment, then install the controller dependencies:
+
+```bash
 pip install -r requirements.txt
-cp .env.example .env
-# sửa .env
+```
+
+Create `.env` from the provided example if present, then configure the QuApp API URL, token, function identifiers, device, shot count, and polling parameters. Do not commit API tokens.
+
+Run the remote workflow:
+
+```bash
 python run_workflow.py
 ```
 
-Controller tạo tuần tự bốn jobs, tải raw job detail, trích `jobResult`, lưu JSON và phân tích.
-
-## Các file sinh ra ở local
-
-```text
-runs/<timestamp>/
-  manifest.json
-  jobs/
-    hhl_invoke_response.json
-    hhl_job_detail.json
-    sign_0_1_invoke_response.json
-    sign_0_1_job_detail.json
-    sign_1_2_invoke_response.json
-    sign_1_2_job_detail.json
-    sign_2_3_invoke_response.json
-    sign_2_3_job_detail.json
-  results/
-    hhl_result.json
-    sign_0_1_result.json
-    sign_1_2_result.json
-    sign_2_3_result.json
-  analysis/
-    summary.json
-  figures/
-    solution_comparison.png
-    probability_comparison.png
-    sign_diagnostics.png
-```
-
-Quapp lưu **job record**, circuit view, histogram và JSON result. Các file trên là bản local do controller chủ động ghi xuống đĩa; Quapp không tự tạo cả cây thư mục này.
-
-## Phân tích lại mà không chạy Quapp
+Analyze previously saved results without invoking QuApp:
 
 ```bash
-python analyze_saved_results.py runs/<timestamp>
+python analyze_saved_results.py PATH_TO_SAVED_RUN
 ```
 
-Lệnh này đọc bốn JSON trong `results/`, tính lại nghiệm và tạo lại biểu đồ. Vì vậy có thể thay đổi tiêu chí sign recovery hoặc visualization mà không tốn thêm quantum jobs.
+## Offline smoke test
 
-## Smoke test bằng Aer trước khi deploy
+Install development dependencies and run the handlers with Aer before deployment:
 
 ```bash
 pip install -r requirements-dev.txt
 python offline_smoke_test.py
 ```
 
-Aer chỉ chạy trong utility local. Hai Quapp handler hoàn toàn không import Aer, không transpile theo backend và không gọi `backend.run()`.
+The deployable handlers do not depend on Aer and do not execute a backend themselves; they return circuits for the hosted runtime.
 
-## Cách hậu xử lý
+## Postprocessing summary
 
-### Job HHL
-
-Giữ shot thỏa:
-
-```text
-phase = 00000
-ancilla = 1
-```
-
-Sau đó gom theo target 2 qubit để có `p_i`, chuẩn hóa điều kiện và lấy:
+For the main HHL result, the controller keeps shots satisfying the configured phase-register and ancilla postselection conditions. It groups the remaining counts by target state, normalizes the conditional probabilities, and estimates amplitude magnitudes with:
 
 ```text
 |x_i| = sqrt(p_i)
 ```
 
-### Job sign cho cặp `(i,j)`
+For a sign job involving indices `i` and `j`, interference provides a cross term. Its sign indicates whether the two components have equal or opposite relative signs. A tolerance region is used when shot noise makes the decision uncertain.
 
-Sau permutation, SWAP và Hadamard, local tính:
+After recovering a normalized signed direction, the controller restores the physical scale with a least-squares scalar and compares the result with `numpy.linalg.solve(A, b)` using absolute error, relative error, residual, and direction fidelity.
 
-```text
-2P(+) ≈ p_i + p_j + 2 x_i x_j
-```
+## Shot-count considerations
 
-Do đó cross term:
-
-```text
-delta = 2P(+) - (p_i + p_j)
-```
-
-- `delta > 0`: cùng dấu;
-- `delta < 0`: trái dấu;
-- vùng `± tolerance`: chưa đủ chắc chắn do shot noise.
-
-Đây là chỉnh sửa có cơ sở trực tiếp hơn so với so sánh `2P(+)` chỉ với `max(p_i,p_j)`.
-
-### Khôi phục nghiệm không chuẩn hóa
-
-Sau khi có hướng chuẩn hóa `x_direction`, tính:
-
-```text
-k = <A x_direction, b> / <A x_direction, A x_direction>
-x_hhl = k x_direction
-```
-
-Sau đó so sánh `x_hhl` với `numpy.linalg.solve(A,b)` bằng absolute error, relative error, residual và fidelity hướng.
-
-## Shots
-
-- Kiểm tra wiring: 1,000–10,000 shots/job.
-- Simulator đánh giá sơ bộ: 100,000 shots/job.
-- Code nghiên cứu ban đầu: 1,000,000 shots/job.
-
-Có 4 jobs, nên tổng số shots là `4 × shots_per_job`. Xác suất hậu chọn ancilla thường nhỏ; sign job cần đủ successful shots, không chỉ tổng shots lớn.
+The workflow uses one main job plus multiple sign jobs. The total number of shots is therefore the number of jobs multiplied by the shots per job. Postselection can retain only a small fraction of the shots, so evaluate the successful-shot count in addition to the requested total.
