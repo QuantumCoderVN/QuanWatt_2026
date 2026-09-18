@@ -1,0 +1,19 @@
+# ============================================================
+# Python Dependencies for HHL Power-Flow Application
+# ============================================================
+
+# Core scientific computing
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+
+# Quantum computing
+qiskit>=1.0.0,<2.0.0
+qiskit-aer>=0.13.0,<1.0.0
+
+# API framework (for Vercel deployment)
+fastapi>=0.109.0,<1.0.0
+pydantic>=2.5.0,<3.0.0
+uvicorn>=0.27.0,<1.0.0
+
+# Production deployment
+mangum>=0.17.0  # AWS Lambda/Vercel adapter for FastAPI

@@ -41,7 +41,7 @@ def print_linear_solution_summary(results):
 
         print("First ΔV solution:")
         print(r["first_v_solution"])
-
+    
 
 def print_final_summary(results):
     print("\n" + "=" * 80)

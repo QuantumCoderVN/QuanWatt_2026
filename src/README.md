@@ -63,6 +63,14 @@ cd src
 python main.py
 ```
 
+To run only the HHL workflow, use the dedicated entry point from the repository root:
+
+```bash
+python app/hhl.py
+```
+
+`app/hhl.py` is self-contained: it includes the case data, HHL implementation, FDLS loop, settings, summaries, and plots. It imports only Python libraries and does not depend on `src/`. Edit the settings at the top of that file to configure the standalone run. It requires NumPy, SciPy, Qiskit, and Matplotlib, and saves HHL figures in `outputs/` relative to the working directory: `fdls_hhl_loss.png`, `hhl_voltage_magnitude.png`, and `hhl_voltage_angle.png`.
+
 ### `config.py`
 
 Central configuration for the root experiment. It controls the FDLS tolerance and iteration limit, HHL phase-estimation parameters, VQLS optimizer/ansatz settings, diagnostic printing, and the output directory.
