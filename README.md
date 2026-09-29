@@ -127,8 +127,8 @@ Follow the [dashboard setup guide](app/README.md) to install its dependencies an
 | --- | --- |
 | [app/](app/) | HHL demo, solver modules, and web dashboard. |
 | [src/](src/README.md) | Classical, HHL, and VQLS experiments. |
-| [tech/](tech/) | Supporting research code and notebooks. |
-| [product/](product/) and [pitch/](pitch/) | Product and presentation materials. |
+| [Tech/](Tech/) | Supporting research code and notebooks. |
+| [pitch/](pitch/) | Product and presentation materials. |
 
 For more experiments, see the [source guide](src/README.md), [sign-recovery guide](src/extract_sign/README.md), and [QuApp workflow](src/hhl_quapp_workflow/README.md).
 
