@@ -1,0 +1,5 @@
+# Select Qiskit SDK / Environment in the Quapp Deploy step.
+# Versions should be consistent with the SDK version selected in Quapp.
+qiskit==1.3.2
+numpy>=1.26,<3
+scipy>=1.11,<2
