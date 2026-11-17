@@ -87,11 +87,11 @@ class QuappConfig:
     device_id: int
     function_name: str
     placeholder_shots: int = 1
-    solve_timeout_seconds: float = 120.0
-    job_timeout_seconds: float = 90.0
+    solve_timeout_seconds: float = 180.0
+    job_timeout_seconds: float = 150.0
     poll_seconds: float = 2.0
     http_timeout_seconds: float = 15.0
-    job_detail_path: str = "/v1/third-party/jobs/{job_id}/detail"
+    job_detail_path: str = "/api/v1/third-party/jobs/{job_id}/detail"
 
     def __post_init__(self):
         parts = urlsplit(self.base_url)
@@ -122,18 +122,24 @@ class QuappConfig:
     @classmethod
     def from_environment(cls):
         names = {
-            "base_url": "QUAPP_BASE_URL", "token": "QUAPP_API_TOKEN",
+            "base_url": "QUAPP_BASE_URL",
             "project_id": "QUAPP_PROJECT_ID", "tenant_id": "QUAPP_TENANT_ID",
             "device_id": "QUAPP_DEVICE_ID", "function_name": "QUAPP_FUNCTION_NAME",
         }
         values = {key: os.environ.get(env, "").strip() for key, env in names.items()}
-        missing = [names[key] for key, value in values.items() if not value]
+        values["token"] = (
+            os.environ.get("QUAPP_API_TOKEN", "").strip()
+            or os.environ.get("QUAPP_ACCESS_TOKEN", "").strip()
+        )
+        missing = [names[key] for key, value in values.items() if key != "token" and not value]
+        if not values["token"]:
+            missing.append("QUAPP_API_TOKEN or QUAPP_ACCESS_TOKEN")
         if missing:
             raise QuappConfigurationError("Configure these server-side settings: " + ", ".join(missing))
         defaults = {
             "placeholder_shots": ("QUAPP_PLACEHOLDER_SHOTS", "1", int),
-            "solve_timeout_seconds": ("QUAPP_SOLVE_TIMEOUT_SECONDS", "120", float),
-            "job_timeout_seconds": ("QUAPP_JOB_TIMEOUT_SECONDS", "90", float),
+            "solve_timeout_seconds": ("QUAPP_SOLVE_TIMEOUT_SECONDS", "180", float),
+            "job_timeout_seconds": ("QUAPP_JOB_TIMEOUT_SECONDS", "150", float),
             "poll_seconds": ("QUAPP_POLL_SECONDS", "2", float),
             "http_timeout_seconds": ("QUAPP_HTTP_TIMEOUT_SECONDS", "15", float),
         }
@@ -378,8 +384,15 @@ class _QuappClient:
 
     def _request(self, method, path, deadline, payload=None):
         cfg = self.config
-        headers = {"Authorization": "Bearer " + cfg.token, "X-Project-Id": cfg.project_id,
-                   "X-Tenant-Id": cfg.tenant_id, "Content-Type": "application/json", "Accept": "application/json"}
+        headers = {
+            "Authorization": "Bearer " + cfg.token,
+            "X-Project-Id": cfg.project_id,
+            "X-Tenant-Id": cfg.tenant_id,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Cloudflare blocks default Python-urllib User-Agent (Error 1010)
+            "User-Agent": "quanwatt-proxy/1.0",
+        }
         request = Request(cfg.base_url.rstrip("/") + path, headers=headers, method=method,
                           data=None if payload is None else json.dumps(payload, allow_nan=False).encode())
         retry_delay = cfg.poll_seconds
@@ -391,7 +404,13 @@ class _QuappClient:
                 raise QuappExecutionError("Quapp request deadline reached.")
             try:
                 with urlopen(request, timeout=min(cfg.http_timeout_seconds, remaining)) as response:
-                    result = json.loads(response.read().decode())
+                    raw = response.read().decode()
+                try:
+                    result = json.loads(raw or "{}")
+                except ValueError as exc:
+                    raise QuappExecutionError(
+                        "Quapp returned invalid JSON: " + raw[:200].replace("\n", " ")
+                    ) from exc
                 if not isinstance(result, dict):
                     raise QuappExecutionError("Quapp returned a non-object response.")
                 return result
@@ -434,6 +453,21 @@ class _QuappClient:
                 delay = max(0.01, 10 - (now - window[0]))
             _pause(delay, deadline)
 
+    def _job_detail_paths(self, job_id: str):
+        """Prefer configured path, then the /api/v1 and /v1 variants used by Quapp."""
+        encoded = quote(job_id, safe="")
+        primary = self.config.job_detail_path.replace("{job_id}", encoded)
+        candidates = [
+            primary,
+            f"/api/v1/third-party/jobs/{encoded}/detail",
+            f"/v1/third-party/jobs/{encoded}/detail",
+        ]
+        seen = set()
+        for path in candidates:
+            if path not in seen:
+                seen.add(path)
+                yield path
+
     def run(self, payload, shots, deadline):
         job_deadline = min(deadline, time.monotonic() + self.config.job_timeout_seconds)
         submitted = self._request("POST", "/api/v1/third-party/function/invoke", job_deadline,
@@ -443,11 +477,23 @@ class _QuappClient:
         job_id = submitted.get("data")
         if not isinstance(job_id, str) or not job_id:
             raise QuappExecutionError("Quapp invoke response lacks a job ID.")
-        path = self.config.job_detail_path.replace("{job_id}", quote(job_id, safe=""))
+        detail_paths = list(self._job_detail_paths(job_id))
+        path_index = 0
         while True:
-            envelope = self._request("GET", path, job_deadline)
+            path = detail_paths[path_index]
+            try:
+                envelope = self._request("GET", path, job_deadline)
+            except QuappExecutionError as exc:
+                # Wrong path often returns HTML/non-JSON; try the alternate detail URL once.
+                if path_index + 1 < len(detail_paths) and "invalid JSON" in str(exc).lower():
+                    path_index += 1
+                    continue
+                raise
             data = envelope.get("data")
             if not isinstance(data, dict):
+                if path_index + 1 < len(detail_paths):
+                    path_index += 1
+                    continue
                 raise QuappExecutionError("Quapp job detail lacks a data object.")
             status = str(data.get("status", "")).upper()
             if status == "DONE":

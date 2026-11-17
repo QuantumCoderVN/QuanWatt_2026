@@ -75,7 +75,7 @@ class BusResult:
 
 @dataclass
 class SolverResult:
-    """Complete solver results for one method (HHL or Classical)."""
+    """Complete HHL power-flow solver results."""
     name: str
     status: str  # "converged", "max_iterations", "timeout", "error"
     converged: bool
@@ -114,33 +114,6 @@ class SolverResult:
             result["error_message"] = self.error_message
 
         return result
-
-
-@dataclass
-class ComparisonResult:
-    """Comparison between HHL and Classical results."""
-    hhl_result: SolverResult
-    classical_result: SolverResult
-    voltage_magnitude_errors: List[float]
-    voltage_angle_errors: List[float]
-    max_vm_error: float
-    max_va_error: float
-    first_theta_error: Optional[float]
-    first_v_error: Optional[float]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "hhl": self.hhl_result.to_dict(),
-            "classical": self.classical_result.to_dict(),
-            "comparison": {
-                "voltage_magnitude_errors": self.voltage_magnitude_errors,
-                "voltage_angle_errors_deg": self.voltage_angle_errors,
-                "max_vm_error": self.max_vm_error,
-                "max_va_error_deg": self.max_va_error,
-                "first_theta_error": self.first_theta_error,
-                "first_v_error": self.first_v_error,
-            }
-        }
 
 
 def numpy_to_serializable(obj):

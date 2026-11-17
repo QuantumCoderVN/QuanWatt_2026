@@ -5,12 +5,19 @@
 
 import { useState, useEffect } from 'react';
 import { AlertCircle, Zap, Info } from 'lucide-react';
-import type { PowerFlowCase, SolverSettings, ComparisonResult, Limits } from './types';
+import type {
+  PowerFlowCase,
+  SolverSettings,
+  SolverResult,
+  Limits,
+  SolveProgressEvent,
+} from './types';
 import { DEFAULT_SETTINGS } from './types';
-import { getDefaultCase, solvePowerFlow } from './api';
+import { getDefaultCase, solvePowerFlowStream } from './api';
 import NetworkEditor from './components/NetworkEditor';
 import SolverControls from './components/SolverControls';
 import ResultsPanel from './components/ResultsPanel';
+import SolveProgressPanel from './components/SolveProgressPanel';
 
 type AppState = 'idle' | 'loading' | 'solving' | 'success' | 'error';
 
@@ -19,17 +26,19 @@ function App() {
   const [case_, setCase] = useState<PowerFlowCase | null>(null);
   const [settings, setSettings] = useState<SolverSettings>(DEFAULT_SETTINGS);
   const [limits, setLimits] = useState<Limits | null>(null);
-  const [results, setResults] = useState<ComparisonResult | null>(null);
+  const [results, setResults] = useState<SolverResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isStale, setIsStale] = useState(false);
+  const [progressEvents, setProgressEvents] = useState<SolveProgressEvent[]>([]);
+  const [currentProgress, setCurrentProgress] = useState<SolveProgressEvent | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  // Load default case on mount
   useEffect(() => {
     getDefaultCase()
       .then((data) => {
         setCase(data.case);
         setLimits(data.limits);
-        setSettings(data.default_settings);
+        setSettings({ ...DEFAULT_SETTINGS, ...data.default_settings });
         setState('idle');
       })
       .catch((err) => {
@@ -37,6 +46,15 @@ function App() {
         setState('error');
       });
   }, []);
+
+  useEffect(() => {
+    if (state !== 'solving') return;
+    setElapsedSeconds(0);
+    const id = window.setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [state]);
 
   const handleCaseChange = (newCase: PowerFlowCase) => {
     setCase(newCase);
@@ -53,9 +71,23 @@ function App() {
     setState('solving');
     setError(null);
     setIsStale(false);
+    setProgressEvents([]);
+    setCurrentProgress({
+      type: 'status',
+      phase: 'starting',
+      message: 'Connecting to solver proxy…',
+    });
 
     try {
-      const result = await solvePowerFlow(case_, settings);
+      const result = await solvePowerFlowStream(case_, settings, (event) => {
+        if (event.type === 'status') {
+          setCurrentProgress(event);
+          setProgressEvents((prev) => [...prev, event]);
+          if (typeof event.elapsed_s === 'number') {
+            setElapsedSeconds(Math.max(0, Math.floor(event.elapsed_s)));
+          }
+        }
+      });
       setResults(result);
       setState('success');
     } catch (err: any) {
@@ -68,7 +100,6 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
@@ -79,7 +110,7 @@ function App() {
                   HHL Power Flow Dashboard
                 </h1>
                 <p className="text-sm text-gray-500">
-                  Quantum linear solver for power flow analysis
+                  Draw the network, then solve with Quapp HHL
                 </p>
               </div>
             </div>
@@ -98,7 +129,6 @@ function App() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {state === 'loading' && (
           <div className="flex items-center justify-center h-64">
@@ -123,28 +153,25 @@ function App() {
 
         {case_ && limits && (
           <div className="space-y-6">
-            {/* Info Banner */}
             <div className="card bg-blue-50 border-blue-200">
               <div className="flex items-start gap-3">
                 <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
                 <div className="text-sm text-blue-900">
                   <p>
-                    <strong>HHL Quantum Solver:</strong> Demonstrates quantum linear system solving
-                    for power flow analysis. Compare HHL results with classical solver.
+                    <strong>HHL Quantum Solver:</strong> Edit the network below, then run
+                    power flow. Linear systems are solved on Quapp HHL.
                     Supports {limits.min_buses}–{limits.max_buses} buses.
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Network Editor */}
             <NetworkEditor
               case={case_}
               limits={limits}
               onChange={handleCaseChange}
             />
 
-            {/* Solver Controls */}
             <SolverControls
               settings={settings}
               limits={limits}
@@ -154,7 +181,15 @@ function App() {
               disabled={state === 'loading'}
             />
 
-            {/* Error Display */}
+            {state === 'solving' && (
+              <SolveProgressPanel
+                events={progressEvents}
+                current={currentProgress}
+                elapsedSeconds={elapsedSeconds}
+                maxIter={settings.max_iter}
+              />
+            )}
+
             {state === 'error' && error && (
               <div className="card bg-red-50 border-red-200">
                 <div className="flex items-start gap-3">
@@ -167,8 +202,7 @@ function App() {
               </div>
             )}
 
-            {/* Results Panel */}
-            {results && (
+            {results && state !== 'solving' && (
               <ResultsPanel
                 results={results}
                 isStale={isStale}
@@ -178,19 +212,10 @@ function App() {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="mt-12 border-t border-gray-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <p className="text-center text-sm text-gray-500">
-            HHL Power Flow Dashboard • Quantum Computing for Power Systems •{' '}
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary-600 hover:text-primary-700"
-            >
-              View Source
-            </a>
+            HHL Power Flow Dashboard • Quapp HHL linear solves
           </p>
         </div>
       </footer>

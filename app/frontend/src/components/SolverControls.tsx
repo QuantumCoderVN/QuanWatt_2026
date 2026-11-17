@@ -75,7 +75,7 @@ export default function SolverControls({
             disabled={disabled}
           />
           <p className="text-xs text-gray-500 mt-1">
-            Maximum FDLS iterations
+            Maximum solver iterations
           </p>
         </div>
 
@@ -167,18 +167,18 @@ export default function SolverControls({
           {isRunning ? (
             <>
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-              Running Solvers...
+              Solving via Quapp HHL...
             </>
           ) : (
             <>
               <Play className="w-5 h-5" />
-              Run Power Flow Analysis
+              Run HHL Power Flow
             </>
           )}
         </button>
         {isRunning && (
           <p className="text-sm text-gray-500 mt-2">
-            This may take 30–60 seconds for HHL quantum simulation...
+            Live progress appears below as each Quapp HHL step finishes…
           </p>
         )}
       </div>

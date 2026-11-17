@@ -1,60 +1,53 @@
-# HHL Power Flow Dashboard
+# QuanWatt HHL Power Flow
 
-Run the dashboard locally to compare quantum HHL and classical power flow results.
+Professional layout:
+
+```text
+app/
+  api.py              # ASGI / Vercel entry (re-exports backend.app)
+  backend/            # FastAPI proxy, FDLS, Quapp HHL client
+  frontend/           # React + Vite dashboard
+  scripts/            # CLI helpers (demo / Quapp smoke)
+  .env                # Quapp secrets (not committed)
+  requirements.txt
+  vercel.json
+```
+
+Flow: **UI → proxy (FDLS) → Quapp HHL (`Ax=b`) → live progress → HHL results**.
 
 ## Requirements
 
-- Python 3.12 with pip
-- Node.js 20 or newer with npm
-- A local copy of this repository
+- Conda env `scquan` (or Python 3.12 + `requirements.txt`)
+- Node.js 20+ / npm
+- `.env` with `QUAPP_BASE_URL`, `QUAPP_ACCESS_TOKEN` (or `QUAPP_API_TOKEN`),
+  `QUAPP_TENANT_ID`, `QUAPP_PROJECT_ID`, `QUAPP_FUNCTION_NAME`, `QUAPP_DEVICE_ID`
 
-The commands below use Linux/macOS. Start each terminal in the repository root (`QuanWatt_2026`).
-
-## 1. Start the backend
-
-In your first terminal:
+## Run locally
 
 ```bash
+conda activate scquan
 cd app
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
 python -m uvicorn api:app --reload --port 8000
 ```
 
-On Windows PowerShell, use `py -3.12 -m venv .venv` to create the environment and `.\.venv\Scripts\Activate.ps1` to activate it.
-
-Keep this terminal running. Check the backend at [http://localhost:8000/api/health](http://localhost:8000/api/health); it should show `"status": "healthy"`.
-
-## 2. Start the frontend
-
-Open a second terminal in the repository root:
-
 ```bash
-cd app/app/frontend
+cd app/frontend
 npm ci
 npm run dev
 ```
 
-Keep this terminal running too. Open [http://localhost:3000](http://localhost:3000), or the local URL printed by Vite if that port is busy.
+Open [http://localhost:3000](http://localhost:3000). Vite proxies `/api` → `:8000`.
 
-The frontend connects to the backend on port 8000 automatically. No environment file is needed for local use.
+## Scripts
 
-## 3. Use the app
-
-1. Start with the default 3-bus network and solver settings.
-2. Click **Run Power Flow Analysis** and wait for the simulation to finish. Progress appears in the backend terminal.
-3. Compare the HHL and classical results, convergence charts, and bus voltages.
-4. Edit the buses, generators, branches, or solver settings, then run the analysis again.
-
-## Stop and restart
-
-Press `Ctrl+C` in each terminal to stop the app.
-
-For later runs, activate the existing Python environment and start the backend, then run `npm run dev` in the frontend folder. Repeat dependency installation only when the requirements or package lock file changes.
+```bash
+cd app
+python scripts/quapp_smoke.py      # test Quapp invoke/poll
+python scripts/hhl_demo.py         # CLI power-flow on default 3-bus case
+```
 
 ## Troubleshooting
 
-- **The dashboard cannot load:** Make sure the backend is running on port 8000, check the health link above, and refresh the dashboard.
-- **Python reports a missing module:** Activate `app/.venv` and rerun `python -m pip install -r requirements.txt` from the outer `app` folder.
-- **The analysis takes a while:** HHL runs a quantum simulation locally. Try the default 3-bus case first and check the backend terminal for progress or errors.
+- Dashboard blank: ensure uvicorn is on 8000, then refresh.
+- Quapp auth errors: refresh tokens in `.env`.
+- Slow solves: each Quapp call is ~1 min; default budget is 15 minutes.

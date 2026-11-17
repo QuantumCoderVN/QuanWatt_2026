@@ -94,17 +94,20 @@ export interface SolverResult {
   error_message?: string;
 }
 
-export interface ComparisonResult {
-  hhl: SolverResult;
-  classical: SolverResult;
-  comparison: {
-    voltage_magnitude_errors: number[];
-    voltage_angle_errors_deg: number[];
-    max_vm_error: number;
-    max_va_error_deg: number;
-    first_theta_error: number | null;
-    first_v_error: number | null;
-  };
+export interface SolveProgressEvent {
+  type: 'status' | 'result' | 'error';
+  phase?: string;
+  message?: string;
+  elapsed_s?: number;
+  max_iter?: number;
+  iteration?: number;
+  solve_index?: number;
+  matrix?: string;
+  execution_mode?: string;
+  fallback_used?: boolean;
+  residual?: number;
+  mismatch?: number;
+  data?: SolverResult;
 }
 
 export const BUS_TYPE_NAMES: Record<number, string> = {

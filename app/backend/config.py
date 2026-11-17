@@ -26,7 +26,8 @@ MIN_ITERATIONS = 1
 MAX_ITERATIONS = 12
 
 # Timeout settings (seconds)
-DEFAULT_TIMEOUT = 240  # 4 minutes application budget
+# Quapp HHL is ~60–90s per linear solve; FDLS needs 2 solves/iteration.
+DEFAULT_TIMEOUT = 900  # 15 minutes application budget for Quapp-backed FDLS
 FUNCTION_TIMEOUT = 300  # 5 minutes Vercel function limit
 
 
@@ -41,6 +42,7 @@ def get_default_solver_settings() -> Dict[str, Any]:
         "phase_target": DEFAULT_PHASE_TARGET,
         "C": DEFAULT_C,
         "timeout_seconds": DEFAULT_TIMEOUT,
+        "use_adaptive_c": False,
     }
 
 

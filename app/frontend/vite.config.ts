@@ -10,6 +10,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // Quapp-backed solves can run 10–15+ minutes with SSE progress
+        timeout: 1_800_000,
+        proxyTimeout: 1_800_000,
       }
     }
   },

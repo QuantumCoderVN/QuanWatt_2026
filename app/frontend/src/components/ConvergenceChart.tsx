@@ -1,23 +1,19 @@
 // ============================================================
 // ConvergenceChart.tsx
-// Convergence history visualization
+// Convergence history visualization (HHL only)
 // ============================================================
 
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { SolverResult } from '../types';
 
 interface Props {
-  classical: SolverResult;
-  hhl: SolverResult;
+  result: SolverResult;
 }
 
-export default function ConvergenceChart({ classical, hhl }: Props) {
-  // Prepare data for chart
-  const maxIterations = Math.max(classical.iterations, hhl.iterations);
-  const data = Array.from({ length: maxIterations }, (_, i) => ({
+export default function ConvergenceChart({ result }: Props) {
+  const data = Array.from({ length: result.iterations }, (_, i) => ({
     iteration: i,
-    classical: classical.loss_history[i] || null,
-    hhl: hhl.loss_history[i] || null,
+    mismatch: result.loss_history[i] ?? null,
   }));
 
   return (
@@ -42,16 +38,7 @@ export default function ConvergenceChart({ classical, hhl }: Props) {
           <Legend />
           <Line
             type="monotone"
-            dataKey="classical"
-            stroke="#059669"
-            name="Classical"
-            strokeWidth={2}
-            dot={{ r: 4 }}
-            connectNulls
-          />
-          <Line
-            type="monotone"
-            dataKey="hhl"
+            dataKey="mismatch"
             stroke="#2563eb"
             name="HHL"
             strokeWidth={2}

@@ -7,7 +7,7 @@ import numpy as np
 from typing import Dict, Callable, Optional
 import time
 
-from network import (
+from .network import (
     make_specified_power,
     initial_voltage,
     calculated_power,
@@ -24,7 +24,8 @@ def fdls_power_flow(
     max_iter: int = 8,
     tolerance: float = 1e-7,
     name: str = "FDLS",
-    timeout_seconds: Optional[float] = None
+    timeout_seconds: Optional[float] = None,
+    on_progress: Optional[Callable] = None,
 ) -> Dict:
     """
     Fast Decoupled Load Flow using specified linear solver.
@@ -43,11 +44,25 @@ def fdls_power_flow(
         tolerance: Convergence tolerance for mismatch norm
         name: Solver name for labeling
         timeout_seconds: Optional timeout budget
+        on_progress: Optional callback(dict) for live UI updates
 
     Returns:
         Dictionary with convergence info, voltages, powers, and first corrections
     """
     start_time = time.time()
+
+    def emit(event: Dict):
+        if on_progress is None:
+            return
+        payload = {
+            **event,
+            "elapsed_s": round(time.time() - start_time, 1),
+            "max_iter": max_iter,
+        }
+        try:
+            on_progress(payload)
+        except Exception:
+            pass
 
     non_slack = case["non_slack"]
     pq = case["pq"]
@@ -68,12 +83,25 @@ def fdls_power_flow(
     converged = False
     timeout_reached = False
 
+    emit({
+        "type": "status",
+        "phase": "fdls_start",
+        "message": f"Starting power-flow iterations (max {max_iter})",
+        "iteration": 0,
+    })
+
     for iteration in range(max_iter):
         # Check timeout
         if timeout_seconds is not None:
             elapsed = time.time() - start_time
             if elapsed > timeout_seconds:
                 timeout_reached = True
+                emit({
+                    "type": "status",
+                    "phase": "timeout",
+                    "message": f"Stopped: time budget exceeded after {elapsed:.0f}s",
+                    "iteration": iteration,
+                })
                 break
 
         P_calc, Q_calc = calculated_power(Ybus, vm, va)
@@ -94,8 +122,23 @@ def fdls_power_flow(
         mismatch_p_history.append(mismatch_p.copy())
         mismatch_q_history.append(mismatch_q.copy())
 
+        emit({
+            "type": "status",
+            "phase": "iteration",
+            "message": f"Iteration {iteration + 1}/{max_iter}: mismatch = {loss:.3e} p.u.",
+            "iteration": iteration + 1,
+            "mismatch": float(loss),
+        })
+
         if loss < tolerance:
             converged = True
+            emit({
+                "type": "status",
+                "phase": "converged",
+                "message": f"Converged at iteration {iteration + 1} (mismatch {loss:.3e})",
+                "iteration": iteration + 1,
+                "mismatch": float(loss),
+            })
             break
 
         # P-theta step
@@ -112,6 +155,12 @@ def fdls_power_flow(
                 va[non_slack] += dtheta
             except Exception as e:
                 print(f"[ERROR] {name} P-theta solve failed at iteration {iteration}: {e}")
+                emit({
+                    "type": "status",
+                    "phase": "error",
+                    "message": f"P-θ solve failed at iteration {iteration + 1}: {e}",
+                    "iteration": iteration + 1,
+                })
                 break
 
         # Q-V step
@@ -128,6 +177,12 @@ def fdls_power_flow(
                 vm[pq] += dV
             except Exception as e:
                 print(f"[ERROR] {name} Q-V solve failed at iteration {iteration}: {e}")
+                emit({
+                    "type": "status",
+                    "phase": "error",
+                    "message": f"Q-V solve failed at iteration {iteration + 1}: {e}",
+                    "iteration": iteration + 1,
+                })
                 break
 
         # Enforce constraints
@@ -178,14 +233,3 @@ def fdls_power_flow(
         "elapsed_time": elapsed_time,
     }
 
-
-def classical_solve(A: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """
-    Classical linear solver using NumPy.
-    """
-    try:
-        x = np.linalg.solve(A, b)
-    except np.linalg.LinAlgError:
-        x = np.linalg.lstsq(A, b, rcond=None)[0]
-
-    return np.real(x)
