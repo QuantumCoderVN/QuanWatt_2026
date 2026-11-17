@@ -6,7 +6,6 @@
 import { useState } from 'react';
 import { Plus, Trash2, Network } from 'lucide-react';
 import type { PowerFlowCase, BusData, BranchData, GenData, Limits } from '../types';
-import { BUS_TYPE_NAMES } from '../types';
 import NetworkDiagram from './NetworkDiagram';
 
 interface Props {

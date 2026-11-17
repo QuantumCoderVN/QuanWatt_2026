@@ -4,7 +4,7 @@
 // ============================================================
 
 import { useEffect, useRef, useState } from 'react';
-import type { PowerFlowCase, BusData, BranchData } from '../types';
+import type { PowerFlowCase } from '../types';
 import { BUS_TYPE_NAMES } from '../types';
 
 interface Props {
@@ -303,7 +303,7 @@ export default function NetworkDiagram({ case: powerCase, onBusClick, onBranchCl
     }
   };
 
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleClick = () => {
     if (hoveredBus && onBusClick) {
       onBusClick(hoveredBus);
     } else if (hoveredBranch && onBranchClick) {
